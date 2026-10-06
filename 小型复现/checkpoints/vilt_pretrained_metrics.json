@@ -1,0 +1,13 @@
+{
+  "train_images": 64,
+  "validation_images": 16,
+  "epochs": 1,
+  "before_pairwise_accuracy": 1.0,
+  "after_pairwise_accuracy": 1.0,
+  "before_image_to_text_r1": 0.9375,
+  "before_text_to_image_r1": 1.0,
+  "after_image_to_text_r1": 0.9375,
+  "after_text_to_image_r1": 1.0,
+  "before_margin": 17.43221426010132,
+  "after_margin": 18.035550117492676
+}

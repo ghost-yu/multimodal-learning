@@ -1,0 +1,182 @@
+[
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 1,
+    "patched_page_index": 0,
+    "footnote_id": "0",
+    "font_size": 8.0,
+    "remaining_height": 4.562731933593749,
+    "text": "1虽然一些工作采用了额外的目标和数据结构，但这两个目标几乎适用于每个VLP模型。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 3,
+    "patched_page_index": 2,
+    "footnote_id": "1",
+    "font_size": 7.5,
+    "remaining_height": 5.74139404296875,
+    "text": "2Bugliarello et al. (2020) 表明，受控设置弥合了各种基于区域特征的VLP模型之间的性能差距。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 4,
+    "patched_page_index": 3,
+    "footnote_id": "2",
+    "font_size": 8.0,
+    "remaining_height": 16.990917968749997,
+    "text": "3R50的参数量为25M，R101为44M，X152为60M。4我们还尝试使用BERT权重初始化这些层，并使用来自ViT的预训练patch投影，但没有奏效。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 5,
+    "patched_page_index": 4,
+    "footnote_id": "3",
+    "font_size": 8.0,
+    "remaining_height": 16.102917480468747,
+    "text": "5ViT-B/32使用ImageNet-21K进行预训练，并在ImageNet-1K上针对图像分类进行微调。我们预计，在更大数据集（例如JFT-300M）上预训练的权重会带来更好的性能。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 6,
+    "patched_page_index": 5,
+    "footnote_id": "4",
+    "font_size": 8.0,
+    "remaining_height": 14.5409423828125,
+    "text": "6VQA分数通过将推断出的答案与10个真实答案进行比较来计算：详情见https://visualqa.org/evaluation.html。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 7,
+    "patched_page_index": 6,
+    "footnote_id": "5",
+    "font_size": 8.0,
+    "remaining_height": 32.2855712890625,
+    "text": "7UNITER提出了三种下游头设置：pair、triplet和pair-biattn。8R@K对应于真实结果是否包含在验证集的前K个结果中。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "中文论文.pdf",
+    "original_page": 8,
+    "patched_page_index": 7,
+    "footnote_id": "6",
+    "font_size": 8.0,
+    "remaining_height": 14.5409423828125,
+    "text": "9FLOPs和时间可以忽略不计，因为该操作是一次嵌入查找。bert-base-uncased使用的30K嵌入字典有23.47 M个参数。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 1,
+    "patched_page_index": 1,
+    "footnote_id": "0",
+    "font_size": 8.0,
+    "remaining_height": 4.562731933593749,
+    "text": "1虽然一些工作采用了额外的目标和数据结构，但这两个目标几乎适用于每个VLP模型。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 3,
+    "patched_page_index": 5,
+    "footnote_id": "1",
+    "font_size": 7.5,
+    "remaining_height": 5.74139404296875,
+    "text": "2Bugliarello et al. (2020) 表明，受控设置弥合了各种基于区域特征的VLP模型之间的性能差距。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 4,
+    "patched_page_index": 7,
+    "footnote_id": "2",
+    "font_size": 8.0,
+    "remaining_height": 16.990917968749997,
+    "text": "3R50的参数量为25M，R101为44M，X152为60M。4我们还尝试使用BERT权重初始化这些层，并使用来自ViT的预训练patch投影，但没有奏效。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 5,
+    "patched_page_index": 9,
+    "footnote_id": "3",
+    "font_size": 8.0,
+    "remaining_height": 16.102917480468747,
+    "text": "5ViT-B/32使用ImageNet-21K进行预训练，并在ImageNet-1K上针对图像分类进行微调。我们预计，在更大数据集（例如JFT-300M）上预训练的权重会带来更好的性能。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 6,
+    "patched_page_index": 11,
+    "footnote_id": "4",
+    "font_size": 8.0,
+    "remaining_height": 14.5409423828125,
+    "text": "6VQA分数通过将推断出的答案与10个真实答案进行比较来计算：详情见https://visualqa.org/evaluation.html。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 7,
+    "patched_page_index": 13,
+    "footnote_id": "5",
+    "font_size": 8.0,
+    "remaining_height": 32.2855712890625,
+    "text": "7UNITER提出了三种下游头设置：pair、triplet和pair-biattn。8R@K对应于真实结果是否包含在验证集的前K个结果中。"
+  },
+  {
+    "folder": "ViLT",
+    "file": "双语论文.pdf",
+    "original_page": 8,
+    "patched_page_index": 15,
+    "footnote_id": "6",
+    "font_size": 8.0,
+    "remaining_height": 14.5409423828125,
+    "text": "9FLOPs和时间可以忽略不计，因为该操作是一次嵌入查找。bert-base-uncased使用的30K嵌入字典有23.47 M个参数。"
+  },
+  {
+    "folder": "PaLI系列/PaLI-3",
+    "file": "中文论文.pdf",
+    "original_page": 3,
+    "patched_page_index": 2,
+    "footnote_id": "7",
+    "font_size": 8.0,
+    "remaining_height": 3.9865966796874996,
+    "text": "2为了更好地利用硬件，嵌入维度从1664改为1536。"
+  },
+  {
+    "folder": "PaLI系列/PaLI-3",
+    "file": "中文论文.pdf",
+    "original_page": 6,
+    "patched_page_index": 5,
+    "footnote_id": "8",
+    "font_size": 8.0,
+    "remaining_height": 3.9865966796874996,
+    "text": "3我们从PaLI和VQ-VAE的训练集中移除了所有验证图像和测试图像。"
+  },
+  {
+    "folder": "PaLI系列/PaLI-3",
+    "file": "双语论文.pdf",
+    "original_page": 3,
+    "patched_page_index": 5,
+    "footnote_id": "7",
+    "font_size": 8.0,
+    "remaining_height": 3.9865966796874996,
+    "text": "2为了更好地利用硬件，嵌入维度从1664改为1536。"
+  },
+  {
+    "folder": "PaLI系列/PaLI-3",
+    "file": "双语论文.pdf",
+    "original_page": 6,
+    "patched_page_index": 11,
+    "footnote_id": "8",
+    "font_size": 8.0,
+    "remaining_height": 3.9865966796874996,
+    "text": "3我们从PaLI和VQ-VAE的训练集中移除了所有验证图像和测试图像。"
+  }
+]

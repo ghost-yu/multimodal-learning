@@ -1,0 +1,38 @@
+{
+  "scope": "原注意力稠密局部运行；门控复用使用TraceTaskMoE接口替身；不是完整专家/模型运行",
+  "torch_version": "2.6.0+cu124",
+  "output_shape": [
+    1,
+    4,
+    4
+  ],
+  "probability_shape": [
+    1,
+    2,
+    4,
+    4
+  ],
+  "manual_max_error": 0.0,
+  "history_max_error": 0.0,
+  "all_masked_row_sum": [
+    [
+      [
+        1.0,
+        1.0,
+        0.9999998807907104,
+        1.0
+      ],
+      [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    ]
+  ],
+  "gate_reused_q_kv_dense": true,
+  "config_boundaries": {
+    "global_moe_off": "UnboundLocalError",
+    "post_ln_extra_kwargs": "TypeError"
+  }
+}

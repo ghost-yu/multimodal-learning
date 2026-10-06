@@ -1,0 +1,38 @@
+{
+  "files": [
+    {
+      "file": "UniLM\\beit3\\engine_for_finetuning.py",
+      "comments_added": 89,
+      "ast_equal_before": true,
+      "full_model_run": false
+    },
+    {
+      "file": "UniLM\\beit3\\utils.py",
+      "comments_added": 47,
+      "ast_equal_before": true,
+      "full_model_run": false
+    },
+    {
+      "file": "UniLM\\beit3\\modeling_finetune.py",
+      "comments_added": 13,
+      "ast_equal_before": true,
+      "full_model_run": false
+    }
+  ],
+  "head_comparisons": [
+    {
+      "file": "engine_for_finetuning.py",
+      "executable_ast_equal_HEAD_ignoring_docstrings": true
+    },
+    {
+      "file": "utils.py",
+      "executable_ast_equal_HEAD_ignoring_docstrings": true
+    },
+    {
+      "file": "modeling_finetune.py",
+      "executable_ast_equal_HEAD_ignoring_docstrings": true
+    }
+  ],
+  "runtime_evidence": "复现/outputs/Caption流程检查.json",
+  "runtime_scope": "原Handler/BeamHypotheses/损失类局部；模拟模型与tokenizer"
+}

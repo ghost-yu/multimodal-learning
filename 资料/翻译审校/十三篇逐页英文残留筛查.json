@@ -1,0 +1,2119 @@
+[
+  {
+    "name": "CLIP",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\CLIP\\中文论文.pdf",
+    "page_count": 48,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 1125,
+        "english_words": 74,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 977,
+        "english_words": 161,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1099,
+        "english_words": 122,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 1325,
+        "english_words": 118,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 916,
+        "english_words": 265,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 1378,
+        "english_words": 75,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 1008,
+        "english_words": 141,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 1021,
+        "english_words": 129,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 1185,
+        "english_words": 89,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 940,
+        "english_words": 134,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 1215,
+        "english_words": 85,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 619,
+        "english_words": 147,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 935,
+        "english_words": 157,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 639,
+        "english_words": 127,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 917,
+        "english_words": 142,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 766,
+        "english_words": 172,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 1086,
+        "english_words": 116,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 1079,
+        "english_words": 401,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 19,
+        "chinese_chars": 1025,
+        "english_words": 138,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 20,
+        "chinese_chars": 1425,
+        "english_words": 45,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 21,
+        "chinese_chars": 594,
+        "english_words": 183,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              55.11800003051758,
+              648.710693359375,
+              290.9708557128906,
+              710.3755493164062
+            ],
+            "words": 56,
+            "preview": "6FairFace is a face image dataset designed to balance age, gen-\nder, and race, in order to reduce asymmetries common in previous\nface datasets. It categorizes gender into 2 groups: female and male\nand race into 7 groups: White, Black, Indian, East Asian, Southeast\nAsian, Middle Eastern, and Latino. There are inherent problems\nwith race and gender classiﬁcations, as e.g. Bowker & Star (2000)\n"
+          }
+        ]
+      },
+      {
+        "page": 22,
+        "chinese_chars": 1030,
+        "english_words": 62,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 23,
+        "chinese_chars": 1322,
+        "english_words": 62,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 24,
+        "chinese_chars": 741,
+        "english_words": 125,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 25,
+        "chinese_chars": 1140,
+        "english_words": 78,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 26,
+        "chinese_chars": 1320,
+        "english_words": 120,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 27,
+        "chinese_chars": 812,
+        "english_words": 253,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 28,
+        "chinese_chars": 359,
+        "english_words": 409,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 29,
+        "chinese_chars": 398,
+        "english_words": 433,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 30,
+        "chinese_chars": 418,
+        "english_words": 423,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 31,
+        "chinese_chars": 444,
+        "english_words": 394,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 32,
+        "chinese_chars": 434,
+        "english_words": 426,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 33,
+        "chinese_chars": 382,
+        "english_words": 440,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 34,
+        "chinese_chars": 447,
+        "english_words": 406,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 35,
+        "chinese_chars": 405,
+        "english_words": 466,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 36,
+        "chinese_chars": 101,
+        "english_words": 93,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 37,
+        "chinese_chars": 880,
+        "english_words": 198,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 38,
+        "chinese_chars": 540,
+        "english_words": 52,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 39,
+        "chinese_chars": 41,
+        "english_words": 98,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              118.4520034790039,
+              220.35552978515625,
+              475.9399719238281,
+              363.86749267578125
+            ],
+            "words": 39,
+            "preview": "Food-101\n102\n75,750\n25,250\naccuracy\nCIFAR-10\n10\n50,000\n10,000\naccuracy\nCIFAR-100\n100\n50,000\n10,000\naccuracy\nBirdsnap\n500\n42,283\n2,149\naccuracy\nSUN397\n397\n19,850\n19,850\naccuracy\nStanford Cars\n196\n8,144\n8,041\naccuracy\nFGVC Aircraft\n100\n6,667\n3,333\nmean per class\nPascal VOC 2007 Classiﬁcation\n20\n5,011\n4,952\n11-point mAP\nDescribable Textures\n47\n3,760\n1,880\naccuracy\nOxford-IIIT Pets\n37\n3,680\n3,669\nmean per class\nCaltech-101\n102\n3,060\n6,085\nmean-per-class\nOxford Flowers 102\n102\n2,040\n6,149\nmean per class\n"
+          }
+        ]
+      },
+      {
+        "page": 40,
+        "chinese_chars": 43,
+        "english_words": 299,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 41,
+        "chinese_chars": 27,
+        "english_words": 278,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 42,
+        "chinese_chars": 97,
+        "english_words": 1493,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 43,
+        "chinese_chars": 32,
+        "english_words": 426,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 44,
+        "chinese_chars": 1193,
+        "english_words": 90,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 45,
+        "chinese_chars": 1274,
+        "english_words": 113,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 46,
+        "chinese_chars": 602,
+        "english_words": 229,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 47,
+        "chinese_chars": 799,
+        "english_words": 141,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 48,
+        "chinese_chars": 20,
+        "english_words": 85,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "ViLT",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\ViLT\\中文论文.pdf",
+    "page_count": 12,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 561,
+        "english_words": 213,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 872,
+        "english_words": 110,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1056,
+        "english_words": 138,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 643,
+        "english_words": 188,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 908,
+        "english_words": 222,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 893,
+        "english_words": 198,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 654,
+        "english_words": 213,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 602,
+        "english_words": 259,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 713,
+        "english_words": 108,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 401,
+        "english_words": 454,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 415,
+        "english_words": 456,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 279,
+        "english_words": 280,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "ALBEF",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\ALBEF\\中文论文.pdf",
+    "page_count": 16,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 830,
+        "english_words": 87,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 1116,
+        "english_words": 37,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 630,
+        "english_words": 160,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 712,
+        "english_words": 257,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              189.7486114501953,
+              137.8177032470703,
+              312.7789611816406,
+              192.73593139648438
+            ],
+            "words": 52,
+            "preview": "GT: breakdown of the car on the road \nTop-5 pseudo-targets:\n1. young woman get out of the car near the road \n2. a woman inspects her damaged car under a tree \n3. a woman looking into a car after locking her keys \ninside \n4. young woman with a broken car calling for help \n5. breakdown of the car on the road\n"
+          },
+          {
+            "bbox": [
+              397.7017517089844,
+              137.4365997314453,
+              504.0348815917969,
+              192.35482788085938
+            ],
+            "words": 44,
+            "preview": "GT: the harbor a small village\nTop-5 pseudo-targets:\n1. the harbour with boats and houses \n2. replica of the sailing ship in the harbour \n3. ships in the harbor of the town \n4. the harbor a small village \n5. boats lined up alongside the geographical \nfeature category in the village\n"
+          }
+        ]
+      },
+      {
+        "page": 5,
+        "chinese_chars": 734,
+        "english_words": 157,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 936,
+        "english_words": 164,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 749,
+        "english_words": 117,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 448,
+        "english_words": 141,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 578,
+        "english_words": 143,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 545,
+        "english_words": 239,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 407,
+        "english_words": 240,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 380,
+        "english_words": 237,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 907,
+        "english_words": 90,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 114,
+        "english_words": 99,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 266,
+        "english_words": 362,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              379.9088134765625,
+              565.8563842773438,
+              482.8824157714844,
+              627.78662109375
+            ],
+            "words": 42,
+            "preview": "GT: young rock star jamming on a guitar\nTop-5 pseudo-targets:\n1. hard rock artist photographed during a \nlive performance\n2. portrait of hard rock artist guitarist \nphotographed before a live performance\n3. guitar player on the concert\n4. musician performing live on stage\n5. pop artist poses at event\n"
+          },
+          {
+            "bbox": [
+              183.287841796875,
+              562.8077392578125,
+              318.96368408203125,
+              631.3687744140625
+            ],
+            "words": 67,
+            "preview": "GT: this is real fast food\nTop-5 pseudo-targets:\n1. transform shredded chicken into decadent sandwiches\n2. recipes up your game and make something other than \njust tacos this week\n3. with rice chicken and vegetables this proves salad can \nbe way more than a bed of lettuce\n4. pork is roasted on site for these tacos\n5. we used lean turkey instead of beef so we could stuff \nthese babies with cheese\n"
+          },
+          {
+            "bbox": [
+              360.8465270996094,
+              497.4899597167969,
+              500.593017578125,
+              559.420166015625
+            ],
+            "words": 48,
+            "preview": "GT: a demonstration of a group of people practicing their \nrights\nTop-5 pseudo-targets:\n1. demonstration for the rights of refugees \n2. people carry red flags and banners in the parade \n3. a demonstration of a group of people practicing their \nrights\n4.\na crowd of people with flags \n5. people attend a rally demanding the release of politician\n"
+          },
+          {
+            "bbox": [
+              192.4464111328125,
+              634.9850463867188,
+              318.3897399902344,
+              696.915283203125
+            ],
+            "words": 51,
+            "preview": "GT: scenes of boats in the ocean \nTop-5 pseudo-targets:\n1. small white boat sailing away on the endless blue \nsea \n2. small sail boat heading to the sea away from the \nshore \n3. a sailboat travels across the horizon off the shores \n4. a bareboat sailboat moored in a tranquil bay \n5. scenes of boats in the ocean\n"
+          },
+          {
+            "bbox": [
+              408.4102783203125,
+              634.3753051757812,
+              503.7922058105469,
+              696.3055419921875
+            ],
+            "words": 39,
+            "preview": "GT: picket fence and a city \nTop-5 pseudo-targets:\n1. a family home in a north suburb \ncovered in snow \n2. rural house with a fence in winter \n3. picket fence and a city \n4. a suburban house is covered in snow \nafter a storm \n5. surrounds a home in winter weather\n"
+          }
+        ]
+      },
+      {
+        "page": 16,
+        "chinese_chars": 52,
+        "english_words": 122,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "VLMo",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\UniLM\\vlmo\\中文论文.pdf",
+    "page_count": 16,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 737,
+        "english_words": 69,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 1121,
+        "english_words": 34,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 439,
+        "english_words": 131,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 607,
+        "english_words": 173,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 743,
+        "english_words": 174,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 993,
+        "english_words": 42,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 550,
+        "english_words": 133,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 634,
+        "english_words": 129,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 849,
+        "english_words": 69,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 589,
+        "english_words": 133,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 255,
+        "english_words": 388,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 300,
+        "english_words": 397,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 225,
+        "english_words": 436,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 270,
+        "english_words": 392,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 130,
+        "english_words": 290,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 643,
+        "english_words": 62,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "BLIP",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\BLIP\\中文论文.pdf",
+    "page_count": 12,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 905,
+        "english_words": 90,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 874,
+        "english_words": 162,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1194,
+        "english_words": 93,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 904,
+        "english_words": 179,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 596,
+        "english_words": 172,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 688,
+        "english_words": 216,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 497,
+        "english_words": 214,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 980,
+        "english_words": 150,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 644,
+        "english_words": 255,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 479,
+        "english_words": 456,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 402,
+        "english_words": 368,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 590,
+        "english_words": 104,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "CoCa",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\open_clip-CoCa\\中文论文.pdf",
+    "page_count": 19,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 676,
+        "english_words": 64,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 929,
+        "english_words": 107,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1011,
+        "english_words": 53,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 595,
+        "english_words": 112,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 1054,
+        "english_words": 74,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 1007,
+        "english_words": 52,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 343,
+        "english_words": 50,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 790,
+        "english_words": 50,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 707,
+        "english_words": 115,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 595,
+        "english_words": 91,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 751,
+        "english_words": 123,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              118.05131530761719,
+              309.1221618652344,
+              488.06365966796875,
+              321.93792724609375
+            ],
+            "words": 42,
+            "preview": "a hand holding a san\nfrancisco 49ers football\na row of cannons with the \neiffel tower in the background\na truck is reflected in \nthe side mirror of a car\na person sitting on a wooden \nbridge holding an umbrella\na white van with a license\nplate that says we love flynn\n"
+          }
+        ]
+      },
+      {
+        "page": 12,
+        "chinese_chars": 828,
+        "english_words": 72,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 520,
+        "english_words": 276,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 271,
+        "english_words": 391,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 350,
+        "english_words": 325,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 299,
+        "english_words": 384,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 321,
+        "english_words": 364,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 422,
+        "english_words": 152,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              112.51699829101562,
+              130.44703674316406,
+              489.7603454589844,
+              300.6545715332031
+            ],
+            "words": 51,
+            "preview": "Optimizer\nAdafacter with Decoupled Weight Decay\nGradient clip\n1.0\nEMA decay rate\n0.9999\nLR decay schedule\nCosine Schedule Decaying to Zero\nLoss\nSoftmax\nMixUp\nNone\nCutMix\nNone\nAutoAugment\nNone\nRepeatedAugment\nNone\nRandAugment\n2, 20\n2, 20\nNone\nNone\nNone\nNone\nLabel smoothing\n0.2\n0.5\n0.1\n0.1\n0.0\n0.0\nTrain steps\n200k\n200k\n120k\n120k\n120k\n120k\nTrain batch size\n512\n512\n128\n128\n128\n128\nPooler LR\n5e-4\n5e-4\n5e-4\n5e-4\n5e-4\n5e-4\nEncoder LR\n0.0\n5e-4\n0.0\n5e-4\n0.0\n5e-4\nWarm-up steps\n0\n0\n1000\n1000\n1000\n1000\nWeight decay rate\n0.01\n0.01\n0.0\n0.0\n0.0\n0.0\n"
+          },
+          {
+            "bbox": [
+              160.96800231933594,
+              463.5540466308594,
+              439.5719909667969,
+              564.0225219726562
+            ],
+            "words": 37,
+            "preview": "Optimizer\nAdafacter with Decoupled Weight Decay\nGradient clip\n1.0\nLR decay schedule\nCosine Schedule Decaying to Zero\nRandAugment\n1, 10\n1, 10\nNone\nNone\nNone\nTrain steps\n100k\n50k\n50k\n50k\n10k\nTrain batch size\n64\n128\n64\n128\n128\nPooler LR\n5e-4\n1e-3\n5e-4\nNA\nNA\nEncoder LR\n2e-5\n5e-5\n2e-5\n1e-5\n1e-5\nWarm-up steps\n1000\n1000\n1000\n1000\n1000\nWeight decay rate\n0.1\n0.1\n0.1\n0.1\n0.1\n"
+          }
+        ]
+      },
+      {
+        "page": 19,
+        "chinese_chars": 100,
+        "english_words": 5,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "BEiT-3",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\UniLM\\beit3\\中文论文.pdf",
+    "page_count": 18,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 296,
+        "english_words": 118,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 761,
+        "english_words": 117,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 733,
+        "english_words": 72,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 543,
+        "english_words": 223,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 558,
+        "english_words": 181,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 729,
+        "english_words": 109,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 481,
+        "english_words": 115,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 690,
+        "english_words": 132,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 416,
+        "english_words": 118,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 272,
+        "english_words": 301,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 279,
+        "english_words": 337,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 311,
+        "english_words": 330,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 283,
+        "english_words": 359,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 304,
+        "english_words": 312,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 177,
+        "english_words": 215,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 222,
+        "english_words": 104,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 38,
+        "english_words": 108,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 41,
+        "english_words": 98,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "Uni-Perceiver",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\Uni-Perceiver\\中文论文.pdf",
+    "page_count": 15,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 642,
+        "english_words": 150,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 1395,
+        "english_words": 22,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1348,
+        "english_words": 25,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 846,
+        "english_words": 201,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 1069,
+        "english_words": 102,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 1074,
+        "english_words": 113,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 1241,
+        "english_words": 59,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 418,
+        "english_words": 182,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 560,
+        "english_words": 453,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 568,
+        "english_words": 504,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 463,
+        "english_words": 445,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 859,
+        "english_words": 79,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 898,
+        "english_words": 118,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 807,
+        "english_words": 144,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 171,
+        "english_words": 147,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "Uni-Perceiver-MoE",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\Uni-Perceiver\\资料\\MoE\\中文论文.pdf",
+    "page_count": 19,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 676,
+        "english_words": 78,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 1110,
+        "english_words": 45,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 611,
+        "english_words": 157,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 823,
+        "english_words": 117,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 596,
+        "english_words": 91,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 834,
+        "english_words": 116,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              196.8788604736328,
+              151.26406860351562,
+              419.02813720703125,
+              227.94407653808594
+            ],
+            "words": 73,
+            "preview": "0\nVisual modality exists in the inputs of the current task.\n1\n0\n1\nText modality exists in the inputs of the current task.\n1\n0\n2\nVisual modality exists in the targets of the current task.\n1\n0\n3\nText modality exists in the targets of the current task.\n1\n0\n4\nThe modality of current token is visual.\n1\n0\n5\nThe modality of current token is text.\n1\n0\n6\nThe attention mask of the current token is causal.\n1\n0\n7\nThe current token comes from the inputs, not the targets.\n1\n0\n"
+          }
+        ]
+      },
+      {
+        "page": 7,
+        "chinese_chars": 721,
+        "english_words": 139,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 575,
+        "english_words": 229,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 598,
+        "english_words": 206,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 361,
+        "english_words": 353,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 406,
+        "english_words": 376,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 357,
+        "english_words": 417,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 419,
+        "english_words": 363,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 83,
+        "english_words": 50,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 605,
+        "english_words": 143,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 760,
+        "english_words": 156,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 104,
+        "english_words": 228,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 90,
+        "english_words": 533,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 19,
+        "chinese_chars": 371,
+        "english_words": 220,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "Uni-Perceiver-v2",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\Uni-Perceiver\\资料\\v2\\中文论文.pdf",
+    "page_count": 14,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 851,
+        "english_words": 131,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              85.73200225830078,
+              234.05796813964844,
+              506.5050964355469,
+              295.48504638671875
+            ],
+            "words": 42,
+            "preview": "haoli@link.cuhk.edu.hk, lechatelia@stu.xjtu.edu.cn,\njiangxh21@mails.tsinghua.edu.cn, zhuwalter@sensetime.com \ndaijifeng@tsinghua.edu.cn, {hsli, xgwang}@ee.cuhk.edu.hk, \nyuanc@sz.tsinghua.edu.cn, xhw@mail.xjtu.edu.cn, {qiaoyu, wangwenhai}@pjlab.org.cn\n"
+          }
+        ]
+      },
+      {
+        "page": 2,
+        "chinese_chars": 955,
+        "english_words": 98,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 919,
+        "english_words": 145,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 1034,
+        "english_words": 99,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 1009,
+        "english_words": 161,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 1212,
+        "english_words": 120,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 941,
+        "english_words": 157,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 571,
+        "english_words": 273,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 718,
+        "english_words": 406,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 616,
+        "english_words": 515,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 766,
+        "english_words": 216,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              50.11199951171875,
+              73.67805480957031,
+              286.36334228515625,
+              149.23953247070312
+            ],
+            "words": 40,
+            "preview": "ditional moes. arXiv preprint arXiv:2206.04674, 2022. 2, 4,\n5, 6, 8, 12, 13\n[49] Yukun Zhu, Ryan Kiros, Rich Zemel, Ruslan Salakhutdinov,\nRaquel Urtasun, Antonio Torralba, and Sanja Fidler. Align-\ning books and movies: Towards story-like visual explana-\ntions by watching movies and reading books. In ICCV, pages\n19–27, 2015. 6, 12, 13\n"
+          }
+        ]
+      },
+      {
+        "page": 12,
+        "chinese_chars": 773,
+        "english_words": 129,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              351.2149963378906,
+              72.55201721191406,
+              490.55487060546875,
+              357.3295593261719
+            ],
+            "words": 58,
+            "preview": "Item\nValue\nenc layers\n6\ndec layers\n6\ndim feedforward\n2048\nhidden dim\n256\ndropout\n0.0\nnheads\n8\nnum queries\n300/900\ntopk queries\n200\nenc n points\n4\ndec n points\n4\ncls cost coef\n2.0\nbbox cost coef\n5.0\ngiou cost coef\n2.0\nmask cost coef\n5.0\ndice cost coef\n5.0\ncls loss coef\n2.0\nbbox loss coef\n5.0\ngiou loss coef\n2.0\nmask loss coef\n5.0\ndice loss coef\n5.0\ndn box noise scale\n1.0\ndn label noise ratio\n0.5\n"
+          }
+        ]
+      },
+      {
+        "page": 13,
+        "chinese_chars": 290,
+        "english_words": 109,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 131,
+        "english_words": 112,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "PaLI",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\PaLI系列\\PaLI\\中文论文.pdf",
+    "page_count": 33,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 691,
+        "english_words": 153,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.97799682617188,
+              132.92539978027344,
+              465.94671630859375,
+              216.1712646484375
+            ],
+            "words": 60,
+            "preview": "Xi Chen, Xiao Wang, Soravit Changpinyo, AJ Piergiovanni, Piotr Padlewski Daniel Sal\nz, Sebastian Goodman, Adam Grycner, Basil Mustafa, Lucas Beyer Alexander Kolesnik\nov, Joan Puigcerver, Nan Ding, Keran Rong, Hassan Akbari Gaurav Mishra, Linting Xu\ne, Ashish Thapliyal, James Bradbury, Weicheng Kuo Mojtaba Seyedhosseini, Chao Jia, \nBurcu Karagol Ayan, Carlos Riquelme Andreas Steiner, Anelia Angelova, Xiaohua Zha\ni, Neil Houlsby, Radu Soricut 谷歌研究院∗\n"
+          }
+        ]
+      },
+      {
+        "page": 2,
+        "chinese_chars": 1011,
+        "english_words": 110,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1102,
+        "english_words": 122,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 886,
+        "english_words": 113,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 1008,
+        "english_words": 128,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 682,
+        "english_words": 134,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 631,
+        "english_words": 167,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 567,
+        "english_words": 178,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 838,
+        "english_words": 122,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 482,
+        "english_words": 246,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 208,
+        "english_words": 396,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 260,
+        "english_words": 372,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 211,
+        "english_words": 417,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 318,
+        "english_words": 348,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 307,
+        "english_words": 366,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 16,
+        "chinese_chars": 178,
+        "english_words": 277,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 586,
+        "english_words": 155,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 449,
+        "english_words": 66,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 19,
+        "chinese_chars": 800,
+        "english_words": 218,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 20,
+        "chinese_chars": 556,
+        "english_words": 128,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 21,
+        "chinese_chars": 361,
+        "english_words": 108,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 22,
+        "chinese_chars": 448,
+        "english_words": 120,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 23,
+        "chinese_chars": 588,
+        "english_words": 179,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 24,
+        "chinese_chars": 803,
+        "english_words": 157,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 25,
+        "chinese_chars": 487,
+        "english_words": 152,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 26,
+        "chinese_chars": 213,
+        "english_words": 214,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              111.09599304199219,
+              270.1335754394531,
+              503.4574279785156,
+              284.1755676269531
+            ],
+            "words": 37,
+            "preview": "ar bn cs da de el en es fa\nfi\nfil\nfr\nhi hr hu id\nit\niw ja ko mi nl no pl pt quz ro ru sv sw te th\ntr uk vi zh avg\n0.0\n"
+          },
+          {
+            "bbox": [
+              111.09599304199219,
+              357.7735900878906,
+              503.4574279785156,
+              371.8155822753906
+            ],
+            "words": 37,
+            "preview": "ar bn cs da de el en es fa\nfi\nfil\nfr\nhi hr hu id\nit\niw ja ko mi nl no pl pt quz ro ru sv sw te th\ntr uk vi zh avg\n0.0\n"
+          }
+        ]
+      },
+      {
+        "page": 27,
+        "chinese_chars": 295,
+        "english_words": 123,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.39765930175781,
+              221.85247802734375,
+              498.6268615722656,
+              555.44482421875
+            ],
+            "words": 37,
+            "preview": "ar\n5.28\n26.58\n39.69\n2.80\n18.46\n32.60\nbn\n0.00\n0.11\n5.67\n0.00\n0.06\n3.31\ncs\n18.19\n39.25\n44.03\n11.24\n27.35\n35.24\nda\n26.44\n48.92\n50.75\n14.07\n34.43\n38.48\nde\n37.83\n58.42\n58.53\n23.61\n43.25\n46.50\nel\n1.56\n13.47\n29.03\n0.39\n5.46\n20.92\nen\n51.22\n51.78\n42.11\n46.24\n47.07\n40.63\nes\n41.81\n57.50\n55.22\n30.29\n47.71\n46.55\nfa\n3.78\n18.39\n44.50\n1.57\n10.74\n35.58\nfi\n14.14\n29.42\n32.64\n6.59\n16.91\n21.80\nfil\n10.94\n16.39\n15.53\n4.18\n8.66\n10.04\nfr\n38.28\n57.06\n52.61\n28.02\n45.20\n43.47\nhi\n0.47\n7.33\n13.14\n0.08\n2.90\n7.42\nhr\n15.86\n34.47\n38.31\n8.80\n22.72\n29.55\nhu\n15.11\n31.17\n44.67\n8.45\n20.52\n35.49\nid\n24.11\n43.72\n46.33\n12.99\n32.08\n36.75\nit\n39.69\n57.47\n54.53\n27.07\n46.79\n44.76\niw\n1.75\n9.11\n38.67\n0.86\n3.99\n29.39\nja\n3.61\n11.67\n35.47\n1.20\n4.91\n27.24\nko\n1.78\n6.00\n36.11\n0.35\n3.14\n25.95\nmi\n0.58\n0.92\n0.33\n0.19\n0.30\n0.22\nnl\n37.47\n51.67\n52.14\n27.26\n44.08\n43.79\nno\n26.53\n49.69\n49.17\n14.61\n35.59\n37.35\npl\n19.67\n42.03\n51.42\n12.00\n31.13\n43.72\npt\n"
+          }
+        ]
+      },
+      {
+        "page": 28,
+        "chinese_chars": 383,
+        "english_words": 119,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.97799682617188,
+              482.867919921875,
+              514.5905151367188,
+              564.5695190429688
+            ],
+            "words": 50,
+            "preview": "Model Summary\nModel Architecture\nPaLI\nis\na\nmultimodal\nsequence-to-sequence\nTrans-\nformer (Vaswani et al., 2017) model derived from the\nT5 (Raffel et al., 2020) encoder-decoder architecture. It takes\ntext tokens and ViT (Dosovitskiy et al., 2021) dense image\nembeddings as inputs to an encoder and autoregressively\npredicts discrete text tokens with a decoder.\n"
+          }
+        ]
+      },
+      {
+        "page": 29,
+        "chinese_chars": 0,
+        "english_words": 169,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.97799682617188,
+              228.78558349609375,
+              514.5863037109375,
+              346.5904846191406
+            ],
+            "words": 68,
+            "preview": "Model Stats\nThe largest PaLI model has 17B parameters, which consists of\na 13B parameter mT5-XXL model and a 4B parameter ViT-e\nmodel. We have also trained 3B and 15B parameter models.\nData Overview\nTraining dataset\nThe model is pre-trained on the following mixture of\ndatasets: WebLI (Table 25), CC3M-35L (Sharma et al., 2018),\nVQ2A-CC3M-35L (Changpinyo et al., 2022a), Open Im-\nages (Kuznetsova et al., 2020), Visual Genome (Krishna et al.,\n2017) and Object365 (Shao et al., 2019). Details are reported\nin Section A.2.\n"
+          }
+        ]
+      },
+      {
+        "page": 30,
+        "chinese_chars": 113,
+        "english_words": 138,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.97799682617188,
+              503.4888916015625,
+              513.0873413085938,
+              581.4025268554688
+            ],
+            "words": 40,
+            "preview": "Evaluation Results\nEvaluation Results\nReported in Section 4.\nModel Usage & Limitations\nSensitive Use\nThe model is capable of open-ended text generations. This\nmodel should not be used for any of the unacceptable language\nmodel use cases, e.g., generation of toxic speech.\n"
+          }
+        ]
+      },
+      {
+        "page": 31,
+        "chinese_chars": 18,
+        "english_words": 377,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.97799682617188,
+              383.0065612792969,
+              500.26239013671875,
+              460.7655029296875
+            ],
+            "words": 63,
+            "preview": "What data does each instance\nconsist of?\nEach instance consists of 20+ features. Most features are\nfrom public web pages; a few are from publicly available\nautomatic services. The primary features are image pixels and\nthe associated texts, including alt-text, page title and OCR.\nOther features include rich image and page meta information\n(e.g. URL, MIME type) and filter signals (attached to alt-text\nonly).\n"
+          }
+        ]
+      },
+      {
+        "page": 32,
+        "chinese_chars": 0,
+        "english_words": 439,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.61900329589844,
+              82.6185302734375,
+              500.3427429199219,
+              189.4654998779297
+            ],
+            "words": 73,
+            "preview": "The dataset likely contains data that might be considered offen-\nsive, insulting or threatening as the data is collected from the\nweb. We use algorithmic methods and classifiers to remove sen-\nsitive / personal identifiable information (PII) / pornographic\nimages.\nCollection Process\nHow was the data associated\nwith each instance acquired?\nImages, alt-text and meta information are from the public web.\nText language identification and OCR annotation are done via\npublicly available automatic services.\n"
+          },
+          {
+            "bbox": [
+              113.64900207519531,
+              321.242919921875,
+              384.83514404296875,
+              413.9045104980469
+            ],
+            "words": 35,
+            "preview": "Preprocessing, cleaning, and labeling\nWas any preprocessing, clean-\ning, or labeling of the data done\n(e.g., discretization or bucketing,\ntokenization, part-of-speech tag-\nging, SIFT feature extraction, re-\nmoval of instances, processing\nof missing values)?\n"
+          },
+          {
+            "bbox": [
+              252.72500610351562,
+              336.14556884765625,
+              500.17279052734375,
+              391.98651123046875
+            ],
+            "words": 50,
+            "preview": "The dataset is not annotated. Images which are identified\nas having adult content are excluded. Empty texts and texts\n(alt-text, page title and OCR) which are identified as PII are\nexcluded. Images identified as having adult content, with im-\nproper shape, or with too many paired-texts are excluded.\n"
+          },
+          {
+            "bbox": [
+              113.97799682617188,
+              533.66455078125,
+              499.80450439453125,
+              578.5465087890625
+            ],
+            "words": 39,
+            "preview": "What (other) tasks could the\ndataset be used for?\nVision-only tasks (image classification, object detection etc.),\nlanguage-only tasks (question answering, natural language\ninference etc.) and vision+Language tasks (image captioning,\nvisual question answering, image-text retrieval etc.).\n"
+          },
+          {
+            "bbox": [
+              113.97799682617188,
+              642.298583984375,
+              500.28924560546875,
+              691.3632202148438
+            ],
+            "words": 40,
+            "preview": "Are there tasks for which the\ndataset should not be used?\nThe dataset should not be used for training any of the unaccept-\nable vision, language or vision-language model use cases, e.g.,\ngeneration of toxic captions or inappropriate images.\nDistribution\n"
+          }
+        ]
+      },
+      {
+        "page": 33,
+        "chinese_chars": 0,
+        "english_words": 37,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "PaLI-X",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\PaLI系列\\PaLI-X\\中文论文.pdf",
+    "page_count": 30,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 557,
+        "english_words": 138,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              118.14099884033203,
+              163.31922912597656,
+              496.6899108886719,
+              275.2690734863281
+            ],
+            "words": 87,
+            "preview": "Xi Chen、Josip Djolonga、Piotr Padlewski、Basil Mustafa、Soravit Changpinyo、Jialin W\nu、Carlos Riquelme Ruiz、Sebastian Goodman、Xiao Wang、Yi Tay、Siamak Shakeri、M\nostafa Dehghani、Daniel Salz、Mario Lucic、Michael Tschannen、Arsha Nagrani、Hexian\ng Hu、Mandar Joshi、Bo Pang、Ceslee Montgomery、Paulina Pietrzyk、Marvin Ritter、A\nJ Piergiovanni、Matthias Minderer、Filip Pavetic、Austin Waters、Gang Li、Ibrahim Alab\ndulmohsin、Lucas Beyer、Julien Amelot、Kenton Lee、Andreas Peter Steiner、Yang Li、\nDaniel Keysers、Anurag Arnab、Yuanzhong Xu、Keran Rong、Alexander Kolesnikov、M\nojtaba Seyedhosseini、Anelia Angelova、Xiaohua Zhai、Neil Houlsby、Radu Soricut\n"
+          }
+        ]
+      },
+      {
+        "page": 2,
+        "chinese_chars": 644,
+        "english_words": 73,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              108.0,
+              689.8546752929688,
+              505.4296875,
+              722.51953125
+            ],
+            "words": 41,
+            "preview": "1Plain counting is usually achievable via good object detection, while complex counting requires a fine-\ngrained understanding of the alignment between language-based specifications and visually-based occurrences.\n2We use OCR tokens produced by the GCP Vision API over the training images as targets.\n"
+          }
+        ]
+      },
+      {
+        "page": 3,
+        "chinese_chars": 1188,
+        "english_words": 70,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 952,
+        "english_words": 119,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 475,
+        "english_words": 139,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 867,
+        "english_words": 142,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 841,
+        "english_words": 171,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              108.0,
+              680.7796630859375,
+              503.9646911621094,
+              722.51953125
+            ],
+            "words": 64,
+            "preview": "4As noted in Table 5, current SOTA on NExT-QA for the open-ended QA task was achieved by Flamingo\n32-shot, which had outperformed prior fine-tuning SOTA. To the best of our knowledge, PaLI-X performance\non this task does outperform existing published fine-tuning performances, with the caveat that we do not have\ninformation on what Flamingo fine-tuning would have achieved on this task.\n"
+          }
+        ]
+      },
+      {
+        "page": 8,
+        "chinese_chars": 492,
+        "english_words": 250,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              110.80023193359375,
+              430.7891540527344,
+              217.96011352539062,
+              464.1548767089844
+            ],
+            "words": 37,
+            "preview": "prompt: detect knife and left half of watermelon and \nright half of watermelon and right hand and left \nhand\noutput: 298 284 722 493 left half of watermelon and \n298 483 721 681 right half of watermelon and 302 188 \n779 260 knife and 202 265 535 493 left hand and 201 \n485 546 723 right hand\n"
+          },
+          {
+            "bbox": [
+              218.2769012451172,
+              430.7891540527344,
+              357.18731689453125,
+              464.1548767089844
+            ],
+            "words": 37,
+            "preview": "prompt: detect window and cat and bike and door and tree and this is \nparadise\noutput: 259 487 423 550 window and 259 839 424 904 window and 706 625 \n787 778 bike and 550 839 759 942 door and 256 363 424 430 window \nand 258 241 422 305 window and 254 715 422 774 window and 254 115 \n422 177 window and 590 120 653 811 this is paradise and 549 131 588 \n161 vent\n"
+          }
+        ]
+      },
+      {
+        "page": 9,
+        "chinese_chars": 851,
+        "english_words": 89,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 319,
+        "english_words": 52,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 596,
+        "english_words": 441,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 19,
+        "english_words": 69,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 323,
+        "english_words": 30,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 165,
+        "english_words": 118,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 260,
+        "english_words": 267,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              113.12063598632812,
+              87.35655975341797,
+              498.8979797363281,
+              200.42930603027344
+            ],
+            "words": 106,
+            "preview": "Captioning of natural images\nCIDEr\nNoCaps\nCaptioning of natural images\nCIDEr\nTextCaps\nCaptioning of natural images containing text\nCIDEr\nVizWiz-Cap\nCaptioning of photos taken by people who are blind\nCIDEr\nVQAv2\nVQA on natural images\nVQA accu.\nOKVQA\nVQA on natural images requiring outside knowledge\nVQA accu.\nTextVQA\nVQA on natural images containing text\nVQA accu.\nVizWiz-QA\nVQA on photos taken by people who are blind\nVQA accu.\nST-VQA\nVQA on natural images containing text\nANLS\nTallyQA\nVQA with counting questions\nEM\nOVEN\nVQA on natural images for visual entity recognition\nEM\nInfoSeek\nVQA on natural images for visual info-seeking questions\nRelaxed EM\n"
+          }
+        ]
+      },
+      {
+        "page": 16,
+        "chinese_chars": 562,
+        "english_words": 65,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 17,
+        "chinese_chars": 492,
+        "english_words": 89,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 18,
+        "chinese_chars": 462,
+        "english_words": 237,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 19,
+        "chinese_chars": 843,
+        "english_words": 73,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 20,
+        "chinese_chars": 247,
+        "english_words": 111,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 21,
+        "chinese_chars": 685,
+        "english_words": 59,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 22,
+        "chinese_chars": 431,
+        "english_words": 121,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 23,
+        "chinese_chars": 573,
+        "english_words": 102,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 24,
+        "chinese_chars": 188,
+        "english_words": 483,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 25,
+        "chinese_chars": 268,
+        "english_words": 463,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 26,
+        "chinese_chars": 365,
+        "english_words": 366,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 27,
+        "chinese_chars": 311,
+        "english_words": 386,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 28,
+        "chinese_chars": 325,
+        "english_words": 351,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 29,
+        "chinese_chars": 405,
+        "english_words": 328,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 30,
+        "chinese_chars": 107,
+        "english_words": 129,
+        "untranslated_block_candidates": []
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  },
+  {
+    "name": "PaLI-3",
+    "path": "C:\\Users\\hgfhg\\Documents\\ChatGPT\\多模态\\PaLI系列\\PaLI-3\\中文论文.pdf",
+    "page_count": 16,
+    "pages": [
+      {
+        "page": 1,
+        "chinese_chars": 762,
+        "english_words": 73,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 2,
+        "chinese_chars": 908,
+        "english_words": 156,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 3,
+        "chinese_chars": 612,
+        "english_words": 181,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 4,
+        "chinese_chars": 771,
+        "english_words": 82,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 5,
+        "chinese_chars": 676,
+        "english_words": 166,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 6,
+        "chinese_chars": 702,
+        "english_words": 145,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 7,
+        "chinese_chars": 278,
+        "english_words": 156,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 8,
+        "chinese_chars": 654,
+        "english_words": 109,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 9,
+        "chinese_chars": 598,
+        "english_words": 481,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 10,
+        "chinese_chars": 158,
+        "english_words": 478,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 11,
+        "chinese_chars": 225,
+        "english_words": 394,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 12,
+        "chinese_chars": 285,
+        "english_words": 394,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 13,
+        "chinese_chars": 215,
+        "english_words": 428,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 14,
+        "chinese_chars": 259,
+        "english_words": 368,
+        "untranslated_block_candidates": []
+      },
+      {
+        "page": 15,
+        "chinese_chars": 262,
+        "english_words": 161,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              110.47211456298828,
+              519.601318359375,
+              500.74395751953125,
+              530.8135986328125
+            ],
+            "words": 37,
+            "preview": "ar\nbn\ncs\nda\nde\nel\nen\nes\nfa\nfi\nfil\nfr\nhi\nhr\nhu\nid\nit\niw\nja\nko\nmi\nnl\nno\npl\npt quz ro\nru\nsv\nsw\nte\nth\ntr\nuk\nvi\nzh avg\n0.0\n"
+          },
+          {
+            "bbox": [
+              110.47211456298828,
+              674.7362670898438,
+              500.74395751953125,
+              685.9486083984375
+            ],
+            "words": 37,
+            "preview": "ar\nbn\ncs\nda\nde\nel\nen\nes\nfa\nfi\nfil\nfr\nhi\nhr\nhu\nid\nit\niw\nja\nko\nmi\nnl\nno\npl\npt quz ro\nru\nsv\nsw\nte\nth\ntr\nuk\nvi\nzh avg\n0.0\n"
+          }
+        ]
+      },
+      {
+        "page": 16,
+        "chinese_chars": 47,
+        "english_words": 72,
+        "untranslated_block_candidates": [
+          {
+            "bbox": [
+              161.04299926757812,
+              211.72206115722656,
+              437.44122314453125,
+              571.2195434570312
+            ],
+            "words": 36,
+            "preview": "ar\n62.22\n39.69\n50.33\n32.60\nbn\n22.67\n5.67\n13.61\n3.31\ncs\n61.69\n44.03\n50.10\n35.24\nda\n72.47\n50.75\n57.16\n38.48\nde\n79.28\n58.53\n64.20\n46.50\nel\n49.11\n29.03\n32.36\n20.92\nen\n52.64\n42.11\n47.89\n40.63\nes\n73.31\n55.22\n59.77\n46.55\nfa\n64.56\n44.50\n50.09\n35.58\nfi\n70.39\n32.64\n54.34\n21.80\nfil\n37.89\n15.53\n25.40\n10.04\nfr\n73.81\n52.61\n63.28\n43.47\nhi\n26.22\n13.14\n14.94\n7.42\nhr\n66.89\n38.31\n51.03\n29.55\nhu\n70.22\n44.67\n54.63\n35.49\nid\n73.53\n46.33\n58.62\n36.75\nit\n75.56\n54.53\n64.14\n44.76\niw\n59.14\n38.67\n44.10\n29.39\nja\n56.69\n35.47\n41.31\n27.24\nko\n61.03\n36.11\n45.50\n25.95\nmi\n0.64\n0.33\n0.30\n0.22\nnl\n67.25\n52.14\n56.23\n43.79\nno\n73.03\n49.17\n57.40\n37.35\npl\n70.69\n51.42\n58.24\n43.72\npt\n70.22\n49.19\n58.47\n42.73\nquz\n6.28\n4.31\n1.89\n1.90\nro\n63.92\n37.75\n48.20\n28.82\nru\n71.69\n50.64\n58.51\n41.11\nsv\n72.69\n53.22\n57.76\n40.66\nsw\n29.86\n6.42\n18.31\n3.41\nte\n7.81\n1.92\n3.39\n1.42\nth\n51.14\n22.00\n34.65\n16.06\ntr\n63.36\n39.50\n49.41\n31.47\nuk\n62.19\n39.53\n46.15\n30."
+          }
+        ]
+      }
+    ],
+    "scope": "文本残留筛查；参考文献/图表英文需人工分类，非全文语义或排版审校"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "files": [
+    "models/blip_pretrain.py",
+    "models/vit.py",
+    "models/med.py",
+    "data/pretrain_dataset.py",
+    "models/blip.py",
+    "models/blip_retrieval.py",
+    "models/blip_vqa.py",
+    "pretrain.py"
+  ],
+  "comparison": "Executable AST equivalent to local source before this update, excluding documentation strings",
+  "training_run": false
+}

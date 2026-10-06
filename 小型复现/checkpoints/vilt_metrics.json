@@ -1,0 +1,10 @@
+{
+  "model": "vilt",
+  "train_images": 64,
+  "validation_images": 16,
+  "epochs": 80,
+  "train_loss": 0.47031013830564916,
+  "train_accuracy": 0.8125,
+  "validation_loss": 1.4394585192203522,
+  "validation_accuracy": 0.46875
+}

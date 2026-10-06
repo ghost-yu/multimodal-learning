@@ -1,0 +1,34 @@
+[
+  {
+    "file": "beit3/modeling_utils.py",
+    "executable_ast_equals_git_head_ignoring_docs": true
+  },
+  {
+    "file": "beit3/modeling_finetune.py",
+    "executable_ast_equals_git_head_ignoring_docs": true
+  },
+  {
+    "file": "代码/torchscale-0.2.0/torchscale/model/BEiT3.py",
+    "executable_ast_equals_downloaded_package": true
+  },
+  {
+    "file": "代码/torchscale-0.2.0/torchscale/component/multiway_network.py",
+    "executable_ast_equals_downloaded_package": true
+  },
+  {
+    "file": "代码/torchscale-0.2.0/torchscale/component/embedding.py",
+    "executable_ast_equals_downloaded_package": true
+  },
+  {
+    "file": "代码/torchscale-0.2.0/torchscale/architecture/encoder.py",
+    "executable_ast_equals_downloaded_package": true
+  },
+  {
+    "file": "beit3/datasets.py",
+    "executable_ast_equals_git_head_ignoring_docs": true
+  },
+  {
+    "file": "beit3/engine_for_finetuning.py",
+    "executable_ast_equals_git_head_ignoring_docs": true
+  }
+]

@@ -1,0 +1,1245 @@
+import ast
+import io
+import json
+import logging
+import math
+
+_logger = logging.getLogger(__name__)
+import os
+import random
+import sys
+import warnings
+from typing import Optional, TYPE_CHECKING
+
+import braceexpand
+from dataclasses import dataclass
+from functools import partial
+from multiprocessing import get_context
+
+import numpy as np
+import pandas as pd
+import torch
+import torchvision.datasets as datasets
+import webdataset as wds
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, IterableDataset, get_worker_info
+from torch.utils.data.dataloader import default_collate
+from torch.utils.data.distributed import DistributedSampler
+from webdataset.filters import _shuffle, pipelinefilter, reraise_exception
+from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
+
+if TYPE_CHECKING:
+    from open_clip.tokenizer import Tokenizer
+
+# Finite backstop for PIL's decompression-bomb guard (warn > this, error > 2x), mainly for the side paths
+# (CsvDataset, ImageFolder, legacy); the WDS path is gated tighter/earlier by --max-image-pixels in decode_pil_rgb.
+Image.MAX_IMAGE_PIXELS = 128_000_000
+
+
+class TokenizeText:
+    # Module-level callable replaces inline lambdas in webdataset pipelines so
+    # they survive pickling — required under forkserver multiprocessing
+    # (Python 3.14+ default on POSIX).
+    def __init__(self, tokenizer: "Tokenizer", variable: bool = False, output_mask: bool = False):
+        self.tokenizer = tokenizer
+        self.variable = variable
+        # output_mask: emit a per-sample bool validity mask (batch key "text_valid", True = real token),
+        # consumed by generative models (attention/pooling + -100 caption-label masking). Only the
+        # sample-level entry point (map_sample) emits it; __call__ always returns tokens only, so
+        # value-level pipeline stages (wds.map_dict) are unaffected. Mutually exclusive with variable
+        # text, whose collators derive their own validity.
+        assert not (variable and output_mask), 'variable-text collation derives its own validity mask'
+        self.output_mask = output_mask
+
+    def __call__(self, text):
+        # Bucketed pipelines tokenize before `wds.decode` runs (the bucket pool holds raw, undecoded samples),
+        # so the caption may arrive as raw utf-8 bytes rather than a decoded str.
+        if isinstance(text, bytes):
+            text = text.decode('utf-8')
+        # `variable=True` returns a per-sample 1-D tensor (no fixed-length padding); collators pad captions
+        # to the per-batch max for text towers that support variable length.
+        if self.variable:
+            return self.tokenizer(text, pad=False)[0]
+        return self.tokenizer(text)[0]
+
+    def map_sample(self, sample):
+        # Sample-level map (wds.map) so the text_valid mask can ride alongside the tokens.
+        text = sample["text"]
+        if isinstance(text, bytes):
+            text = text.decode('utf-8')
+        if self.output_mask:
+            tokens, mask = self.tokenizer(text, output_mask=True)
+            sample["text"] = tokens[0]
+            sample["text_valid"] = mask[0]
+        else:
+            sample["text"] = self(text)
+        return sample
+
+
+def _map_no_key(data, f, handler=reraise_exception):
+    """Like wds.map, but do not synthesize __key__ on dict outputs."""
+    for sample in data:
+        try:
+            result = f(sample)
+        except Exception as exn:
+            if handler(exn):
+                continue
+            else:
+                break
+        if result is None:
+            continue
+        yield result
+
+
+map_no_key = pipelinefilter(_map_no_key)
+
+
+from open_clip_train.naflex_data import (
+    CaptionLength,
+    LengthBucketer,
+    NaFlexBatcher,
+    NaFlexMapDatasetWrapper,
+    collate_naflex_dicts,
+    collate_naflex_tuples,
+    collate_variable_text,
+    create_naflex_eval_transform,
+    require_naflex,
+)
+
+
+def resolve_text_layout(args, model_traits):
+    """Return ``(text_in_token_budget, variable_text)`` for the loaders.
+
+    ``text_in_token_budget``: captions count toward the NaFlex row token budget (GenLIP / GenLAP rows).
+    ``variable_text``: per-batch padded text (token budgeting, user override, or the text tower's contract).
+    ``model_traits`` is the built model's :class:`~open_clip.ModelTraits`
+    (``open_clip.get_model_traits(model)``) and is required: loaders never infer the model family from ``args``.
+    """
+    if model_traits is None:
+        raise ValueError("data loaders require model_traits (open_clip.get_model_traits(model)).")
+    text_in_budget = bool(model_traits.naflex_text_in_token_budget)
+    variable_text = text_in_budget or bool(getattr(args, 'variable_text', False)) or bool(model_traits.variable_text)
+    return text_in_budget, variable_text
+
+
+def get_text_pad_id(tokenizer: "Tokenizer") -> int:
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_id is None:
+        raise ValueError("variable_text=True requires a tokenizer with a reserved `pad_token_id`.")
+    return int(pad_id)
+
+
+def collate_variable_text_dicts(
+        batch,
+        *,
+        pad_id: int,
+        target_key: str = "text",
+        text_pad_multiple: Optional[int] = None,
+        text_pad_cap: Optional[int] = None,
+):
+    text, text_valid = collate_variable_text(
+        [sample[target_key] for sample in batch], pad_id,
+        pad_multiple=text_pad_multiple, pad_cap=text_pad_cap,
+    )
+    others = [{k: v for k, v in sample.items() if k != target_key} for sample in batch]
+    out = default_collate(others) if others and others[0] else {}
+    out[target_key] = text
+    out[f"{target_key}_valid"] = text_valid
+    return out
+
+
+class CsvDataset(Dataset):
+    def __init__(
+            self,
+            input_filename,
+            transforms,
+            img_key,
+            caption_key,
+            sep="\t",
+            tokenizer=None,
+            variable_text: bool = False,
+            output_text_mask: bool = False,
+    ):
+        _logger.debug(f'Loading csv data from {input_filename}.')
+        df = pd.read_csv(input_filename, sep=sep)
+
+        # Keep as pandas Series rather than converting to Python lists.
+        # Python lists of strings cause copy-on-write memory duplication in
+        # forked DataLoader workers because the cyclic GC walks every element
+        # and modifies reference counts.  Pandas Series are backed by
+        # numpy/pyarrow buffers that the GC does not traverse.
+        self.images = df[img_key]
+        self.captions = df[caption_key]
+        self.transforms = transforms
+        _logger.debug('Done loading data.')
+
+        self.tokenize = tokenizer
+        self.variable_text = variable_text
+        assert not (variable_text and output_text_mask), 'variable-text collation derives its own validity mask'
+        self.output_text_mask = output_text_mask
+        self._tokenize_text = TokenizeText(tokenizer, variable=variable_text, output_mask=output_text_mask)
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = Image.open(str(self.images.iloc[idx]))
+        if self.transforms is not None:
+            image = self.transforms(image)
+        caption = str(self.captions.iloc[idx])
+        # Preserve CSV's list input for fixed-length tokenizers, including user-provided callables.
+        return self._tokenize_text.map_sample({"image": image, "text": caption if self.variable_text else [caption]})
+
+
+class SharedEpoch:
+    def __init__(self, epoch: int = 0, mp_context: Optional[str] = None):
+        # Create the shared counter in the SAME multiprocessing context as the DataLoader workers. A fork-context
+        # SemLock can't be shipped to forkserver/spawn workers ("A SemLock created in a fork context is being
+        # shared with a process in a spawn context"), which bites the audio loader (forkserver) once this rides
+        # inside ResampledShards2 and is pickled to a worker. mp_context=None -> default context (fork on Linux).
+        self.shared_epoch = get_context(mp_context).Value('i', epoch)
+
+    def set_value(self, epoch):
+        self.shared_epoch.value = epoch
+
+    def get_value(self):
+        return self.shared_epoch.value
+
+
+@dataclass
+class DataInfo:
+    dataloader: DataLoader
+    sampler: DistributedSampler = None
+    shared_epoch: SharedEpoch = None
+
+    def set_epoch(self, epoch):
+        if self.shared_epoch is not None:
+            self.shared_epoch.set_value(epoch)
+        if self.sampler is not None and isinstance(self.sampler, DistributedSampler):
+            self.sampler.set_epoch(epoch)
+
+
+def expand_urls(urls, weights=None):
+    if weights is None:
+        expanded_urls = wds.shardlists.expand_urls(urls)
+        return expanded_urls, None
+    if isinstance(urls, str):
+        urllist = urls.split("::")
+        weights = weights.split('::')
+        assert len(weights) == len(urllist),\
+            f"Expected the number of data components ({len(urllist)}) and weights({len(weights)}) to match."
+        weights = [float(weight) for weight in weights]
+        all_urls, all_weights = [], []
+        for url, weight in zip(urllist, weights):
+            expanded_url = list(braceexpand.braceexpand(url))
+            expanded_weights = [weight for _ in expanded_url]
+            all_urls.extend(expanded_url)
+            all_weights.extend(expanded_weights)
+        return all_urls, all_weights
+    else:
+        all_urls = list(urls)
+        return all_urls, weights
+
+
+def get_dataset_size(shards):
+    shards_list, _ = expand_urls(shards)
+    dir_path = os.path.dirname(shards_list[0])
+    sizes_filename = os.path.join(dir_path, 'sizes.json')
+    len_filename = os.path.join(dir_path, '__len__')
+    if os.path.exists(sizes_filename):
+        sizes = json.load(open(sizes_filename, 'r'))
+        total_size = sum([int(sizes[os.path.basename(shard)]) for shard in shards_list])
+    elif os.path.exists(len_filename):
+        # FIXME this used to be eval(open(...)) but that seemed rather unsafe
+        total_size = ast.literal_eval(open(len_filename, 'r').read())
+    else:
+        total_size = None  # num samples undefined
+        # some common dataset sizes (at time of authors last download)
+        # CC3M (train): 2905954
+        # CC12M: 10968539
+        # LAION-400M: 407332084
+        # LAION-2B (english): 2170337258
+    num_shards = len(shards_list)
+    return total_size, num_shards
+
+
+def get_imagenet(args, preprocess_fns, split, naflex_data_config=None):
+    assert split in ["train", "val", "v2"]
+    is_train = split == "train"
+    preprocess_train, preprocess_val = preprocess_fns
+    use_naflex_eval = naflex_data_config is not None and not is_train
+    collate_fn = None
+
+    if is_train and naflex_data_config is not None:
+        raise ValueError("NaFlex is only wired for validation and zero-shot ImageNet loaders, not --imagenet-train.")
+
+    if use_naflex_eval:
+        preprocess_val, naflex_max_seq_len, _ = create_naflex_eval_transform(preprocess_val, naflex_data_config)
+        collate_fn = partial(collate_naflex_tuples, max_seq_len=naflex_max_seq_len)
+
+    if split == "v2":
+        from imagenetv2_pytorch import ImageNetV2Dataset
+        dataset = ImageNetV2Dataset(location=args.imagenet_v2, transform=preprocess_val)
+    else:
+        if is_train:
+            data_path = args.imagenet_train
+            preprocess_fn = preprocess_train
+        else:
+            data_path = args.imagenet_val
+            preprocess_fn = preprocess_val
+        assert data_path
+
+        dataset = datasets.ImageFolder(data_path, transform=preprocess_fn)
+
+    if is_train:
+        idxs = np.zeros(len(dataset.targets))
+        target_array = np.array(dataset.targets)
+        k = 50
+        for c in range(1000):
+            m = target_array == c
+            n = len(idxs[m])
+            arr = np.zeros(n)
+            arr[:k] = 1
+            np.random.shuffle(arr)
+            idxs[m] = arr
+
+        idxs = idxs.astype('int')
+        sampler = SubsetRandomSampler(np.where(idxs)[0])
+    else:
+        sampler = None
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    return DataInfo(dataloader=dataloader, sampler=sampler)
+
+
+def count_samples(dataloader):
+    os.environ["WDS_EPOCH"] = "0"
+    n_elements, n_batches = 0, 0
+    for batch in dataloader:
+        n_batches += 1
+        image = batch["image"]
+        image_batch_size = image["patches"].shape[0] if isinstance(image, dict) else len(image)
+        n_elements += image_batch_size
+        assert image_batch_size == len(batch["text"])
+    return n_elements, n_batches
+
+
+def filter_no_caption_or_no_image(sample):
+    has_caption = ('txt' in sample)
+    has_image = _has_image(sample)
+    return has_caption and has_image
+
+
+DEFAULT_IMAGE_KEY = "jpg;png;jpeg;webp"
+
+
+def _split_wds_keys(keys):
+    parts = keys.split(";") if isinstance(keys, str) else keys
+    return tuple(s for k in parts if isinstance(k, str) and (s := k.strip()))
+
+
+def _has_image(sample, image_keys=DEFAULT_IMAGE_KEY):
+    return any(key in sample for key in _split_wds_keys(image_keys))
+
+
+class FilterValidSample:
+    """WebDataset filter keeping samples that have an image and a caption source.
+
+    Module-level + picklable (forkserver-safe). Two mutually-exclusive caption sources:
+      - ``json_text_key`` set  -> require a ``.json`` member (caption read from a field of it).
+      - otherwise              -> require one of the ``text_key`` member suffixes (``;``-separated alternatives).
+    ``image_key`` accepts the same ``;``-separated member suffix alternatives for the image.
+    """
+
+    def __init__(
+            self,
+            text_key: str = "txt",
+            json_text_key: Optional[str] = None,
+            image_key: str = DEFAULT_IMAGE_KEY,
+    ):
+        self.json_text_key = json_text_key
+        self.image_keys = _split_wds_keys(image_key)
+        self.text_keys = None if json_text_key else _split_wds_keys(text_key)
+
+    def __call__(self, sample):
+        if not any(key in sample for key in self.image_keys):  # image_keys pre-split in __init__
+            return False
+        if self.json_text_key is not None:
+            return 'json' in sample
+        return any(key in sample for key in self.text_keys)
+
+
+def _pad_caption_weights(weights, n):
+    """Validate + pad caption sampling weights to length ``n`` (unspecified tail -> 0 = fallback only)."""
+    if weights is None:
+        return None
+    weights = [float(w) for w in weights]
+    if len(weights) > n:
+        raise ValueError(f"--json-text-key-probs has {len(weights)} entries but only {n} caption keys")
+    return weights + [0.0] * (n - len(weights))
+
+
+def _weighted_order(keys, weights):
+    """Per-sample priority order for caption keys: positive-weight keys sampled without replacement (P
+    proportional to weight), then zero-weight keys in their original order as fallbacks. Uses the global
+    ``random`` (per-worker seeded by the DataLoader), so it stays picklable with no instance RNG state.
+    """
+    pos = [[key, weight] for key, weight in zip(keys, weights) if weight > 0]
+    order = []
+    while pos:
+        i = random.choices(range(len(pos)), weights=[w for _, w in pos], k=1)[0]
+        order.append(pos.pop(i)[0])
+    order.extend(key for key, weight in zip(keys, weights) if weight <= 0)
+    return order
+
+
+class JsonCaptionExtractor:
+    """Extract a caption string from JSON metadata (datasets without a ``.txt`` member).
+
+    ``caption_key`` may be a single key, a ``;``-separated priority string, or a list/tuple of keys. With
+    ``sample_probs=None`` the first non-empty value in that order wins (deterministic priority). With
+    ``sample_probs`` (one weight per key, aligned; unspecified keys default to 0), the keys are drawn into a
+    random priority order weighted by those probs and the first non-empty in that order wins -- so a 0-weight
+    key still serves as a fallback. Robust to JSON being either a parsed dict or raw bytes/str. Module-level +
+    picklable, mirroring ``TokenizeText``.
+    """
+
+    def __init__(self, caption_key, sample_probs=None):
+        self.caption_keys = _split_wds_keys(caption_key)
+        self.caption_weights = _pad_caption_weights(sample_probs, len(self.caption_keys))
+
+    def __call__(self, meta):
+        if isinstance(meta, (bytes, bytearray, str)):
+            try:
+                meta = json.loads(meta)
+            except (ValueError, TypeError):
+                meta = {}
+        caption = ""
+        if isinstance(meta, dict):
+            keys = (self.caption_keys if self.caption_weights is None
+                    else _weighted_order(self.caption_keys, self.caption_weights))
+            for key in keys:
+                value = meta.get(key)
+                if isinstance(value, str) and (caption := value.strip()):
+                    break
+        return caption
+
+
+class FilterNonEmptyText:
+    """WebDataset filter keeping samples whose normalized text field is non-empty."""
+
+    def __init__(self, key: str = "text"):
+        self.key = key
+
+    def __call__(self, sample):
+        text = sample.get(self.key)
+        if isinstance(text, (bytes, bytearray)):
+            try:
+                text = text.decode("utf-8")
+            except UnicodeDecodeError:
+                return False
+        return isinstance(text, str) and bool(text.strip())
+
+
+def decode_pil_rgb(data, max_pixels=None):
+    """Decode raw image bytes to an RGB PIL image (what ``wds.decode('pilrgb')`` does, as a per-key map).
+
+    Bucketed pipelines reorder samples *before* decoding so the bucket pool holds raw bytes instead of decoded
+    images (10-50x smaller); this runs after the reorder. PIL sniffs the format from the byte signature, so the
+    extension-keyed dispatch of ``wds.decode`` is not needed.
+
+    ``max_pixels`` (``--max-image-pixels``) is checked from the header *before* ``img.load()``: an oversized image
+    raises here -- cheap, no pixel decompression -- and is dropped by the caller's skip path (``log_and_continue``
+    or the NaFlex batcher's skip-and-replenish), rather than decompressing e.g. a 99 MP JPEG only to shrink it to
+    the training resolution. The ``Image.open`` header parse is intrinsic to decode, so the check costs nothing.
+    """
+    with io.BytesIO(data) as stream:
+        img = Image.open(stream)
+        if max_pixels and img.width * img.height > max_pixels:
+            raise ValueError(f"image {img.width}x{img.height} exceeds --max-image-pixels ({max_pixels})")
+        img.load()
+        return img.convert("RGB")
+
+
+_wds_error_count = 0
+# Web-scraped sets (DFN/LAION) carry a small fraction of junk the pipeline skips -- HTML error pages saved
+# as .jpg (UnidentifiedImageError), mislabeled/oversized images (DecompressionBombError), truncated bytes.
+# A per-sample WARNING floods the log when that junk is concentrated (e.g. a dirty tail shard) or re-hit
+# under --dataset-resampled. So log the first skip + a running total every N (env OPEN_CLIP_WDS_ERROR_LOG_EVERY,
+# default 1000; set <=0 to silence the WARNING entirely). Full per-sample detail stays at DEBUG.
+_WDS_ERROR_LOG_EVERY = int(os.environ.get('OPEN_CLIP_WDS_ERROR_LOG_EVERY', '1000'))
+
+
+def log_and_continue(exn):
+    """Call in an exception handler to ignore any exception, log (rate-limited), and continue."""
+    global _wds_error_count
+    _wds_error_count += 1
+    n = _wds_error_count
+    _logger.debug(f'Handling webdataset error ({repr(exn)}). Ignoring.')
+    if _WDS_ERROR_LOG_EVERY > 0 and (n == 1 or n % _WDS_ERROR_LOG_EVERY == 0):
+        _logger.warning(f'Skipped {n} webdataset samples (decode/load errors); ignoring. Most recent: {repr(exn)}.')
+    return True
+
+
+def group_by_keys_nothrow(data, keys=base_plus_ext, lcase=True, suffixes=None, handler=None):
+    """Return function over iterator that groups key, value pairs into samples.
+
+    :param keys: function that splits the key into key and extension (base_plus_ext)
+    :param lcase: convert suffixes to lower case (Default value = True)
+    """
+    current_sample = None
+    for filesample in data:
+        assert isinstance(filesample, dict)
+        fname, value = filesample["fname"], filesample["data"]
+        prefix, suffix = keys(fname)
+        if prefix is None:
+            continue
+        if lcase:
+            suffix = suffix.lower()
+        # FIXME webdataset version throws if suffix in current_sample, but we have a potential for
+        #  this happening in the current LAION400m dataset if a tar ends with same prefix as the next
+        #  begins, rare, but can happen since prefix aren't unique across tar files in that dataset
+        if current_sample is None or prefix != current_sample["__key__"] or suffix in current_sample:
+            if valid_sample(current_sample):
+                yield current_sample
+            current_sample = dict(__key__=prefix, __url__=filesample["__url__"])
+        if suffixes is None or suffix in suffixes:
+            current_sample[suffix] = value
+    if valid_sample(current_sample):
+        yield current_sample
+
+
+def tarfile_to_samples_nothrow(src, handler=log_and_continue):
+    # NOTE this is a re-impl of the webdataset impl with group_by_keys that doesn't throw
+    streams = url_opener(src, handler=handler)
+    files = tar_file_expander(streams, handler=handler)
+    samples = group_by_keys_nothrow(files, handler=handler)
+    return samples
+
+
+def pytorch_worker_seed(increment=0):
+    """get dataloader worker seed from pytorch"""
+    worker_info = get_worker_info()
+    if worker_info is not None:
+        # favour using the seed already created for pytorch dataloader workers if it exists
+        seed = worker_info.seed
+        if increment:
+            # space out seed increments so they can't overlap across workers in different iterations
+            seed += increment * max(1, worker_info.num_workers)
+        return seed
+    # fallback to wds rank based seed
+    return wds.utils.pytorch_worker_seed()
+
+
+_SHARD_SHUFFLE_SIZE = 2000
+_SHARD_SHUFFLE_INITIAL = 500
+_SAMPLE_SHUFFLE_SIZE = 5000
+_SAMPLE_SHUFFLE_INITIAL = 1000
+
+
+def wds_shuffle_sizes():
+    """WebDataset shuffle buffer sizes ``(shard_size, shard_initial, sample_size, sample_initial)``.
+
+    Read at pipeline-build time so the ``OPENCLIP_WDS_*`` env vars can override the module defaults — e.g. set
+    tiny values when iterating a small test shard so the first batch doesn't wait on a multi-thousand-sample
+    buffer fill. Unset env vars preserve prior behavior.
+    """
+    env = os.environ.get
+    return (
+        int(env("OPENCLIP_WDS_SHARD_SHUFFLE_SIZE", _SHARD_SHUFFLE_SIZE)),
+        int(env("OPENCLIP_WDS_SHARD_SHUFFLE_INITIAL", _SHARD_SHUFFLE_INITIAL)),
+        int(env("OPENCLIP_WDS_SAMPLE_SHUFFLE_SIZE", _SAMPLE_SHUFFLE_SIZE)),
+        int(env("OPENCLIP_WDS_SAMPLE_SHUFFLE_INITIAL", _SAMPLE_SHUFFLE_INITIAL)),
+    )
+
+
+class detshuffle2(wds.PipelineStage):
+    def __init__(
+            self,
+            bufsize=1000,
+            initial=100,
+            seed=0,
+            epoch=-1,
+    ):
+        self.bufsize = bufsize
+        self.initial = initial
+        self.seed = seed
+        self.epoch = epoch
+
+    def run(self, src):
+        if isinstance(self.epoch, SharedEpoch):
+            epoch = self.epoch.get_value()
+        else:
+            # NOTE: this is epoch tracking is problematic in a multiprocess (dataloader workers or train)
+            # situation as different workers may wrap at different times (or not at all).
+            self.epoch += 1
+            epoch = self.epoch
+        rng = random.Random()
+        if self.seed < 0:
+            # If seed is negative, we use the worker's seed, this will be different across all nodes/workers
+            seed = pytorch_worker_seed(epoch)
+        else:
+            # This seed to be deterministic AND the same across all nodes/workers in each epoch
+            seed = self.seed + epoch
+        rng.seed(seed)
+        return _shuffle(src, self.bufsize, self.initial, rng)
+
+
+class ResampledShards2(IterableDataset):
+    """An iterable dataset yielding a list of urls."""
+
+    def __init__(
+        self,
+        urls,
+        weights=None,
+        nshards=sys.maxsize,
+        worker_seed=None,
+        deterministic=False,
+        epoch=-1,
+    ):
+        """Sample shards from the shard list with replacement.
+
+        :param urls: a list of URLs as a Python list or brace notation string
+        """
+        super().__init__()
+        urls, weights = expand_urls(urls, weights)
+        self.urls = urls
+        self.weights = weights
+        if self.weights is not None:
+            assert len(self.urls) == len(self.weights),\
+                f"Number of urls {len(self.urls)} and weights {len(self.weights)} should match."
+        assert isinstance(self.urls[0], str)
+        self.nshards = nshards
+        self.rng = random.Random()
+        self.worker_seed = worker_seed
+        self.deterministic = deterministic
+        self.epoch = epoch
+
+    def __iter__(self):
+        """Return an iterator over the shards."""
+        if isinstance(self.epoch, SharedEpoch):
+            epoch = self.epoch.get_value()
+        else:
+            # NOTE: this is epoch tracking is problematic in a multiprocess (dataloader workers or train)
+            # situation as different workers may wrap at different times (or not at all).
+            self.epoch += 1
+            epoch = self.epoch
+        if self.deterministic:
+            # reset seed w/ epoch if deterministic
+            if self.worker_seed is None:
+                # pytorch worker seed should be deterministic due to being init by arg.seed + rank + worker id
+                seed = pytorch_worker_seed(epoch)
+            else:
+                seed = self.worker_seed() + epoch
+            self.rng.seed(seed)
+        for _ in range(self.nshards):
+            if self.weights is None:
+                yield dict(url=self.rng.choice(self.urls))
+            else:
+                yield dict(url=self.rng.choices(self.urls, weights=self.weights, k=1)[0])
+
+
+class RepeatedShardList(IterableDataset):
+    """An iterable dataset that repeats a finite shard list."""
+
+    def __init__(self, urls):
+        super().__init__()
+        self.urls, _ = expand_urls(urls)
+        assert isinstance(self.urls[0], str)
+
+    def __iter__(self):
+        while True:
+            for url in self.urls:
+                yield dict(url=url)
+
+
+def append_naflex_train_stages(
+        pipeline,
+        *,
+        naflex_data_config,
+        transform_factory,
+        tokenize_text,
+        primary_key,
+        num_samples,
+        num_tokens,
+        args,
+        shared_epoch,
+        pad_id,
+        per_row_text_tokens,
+        bucketer=None,
+        decode_fn=None,
+        decode_error_handler=None,
+        pad_multiple=None,
+        text_pad_multiple=None,
+        text_pad_cap=None,
+):
+    """Append the modality-agnostic NaFlex train stages to ``pipeline`` and return the ``NaFlexBatcher``.
+
+    Shared by the image (``get_wds_dataset``) and audio (``get_wds_audio_dataset``) pipelines: tokenize text ->
+    optional length bucketing -> ``NaFlexBatcher``.
+    ``decode_fn`` is the caller's modality-specific decode (image bytes -> PIL / audio bytes -> ``(waveform,
+    sr)``); the batcher applies it *inside its per-sample loop* (not as a pipeline stage) so the bucket pool AND
+    the batcher's per-batch accumulator both hold raw, undecoded samples -- only one decoded sample is alive at a
+    time (avoids accumulating ``batch_size`` full-res images -> OOM). ``decode_error_handler`` (e.g.
+    ``log_and_continue``) logs skipped decode failures.
+    The batcher reads ``sample[primary_key]`` (``"image"`` or ``"audio"``) plus ``sample['text']`` and applies
+    ``transform_factory`` to produce the ``{patches, patch_coord, patch_valid}`` rows -- so audio reuses the
+    whole batching/scheduling/collation path unchanged via ``primary_key="audio"``.
+    """
+    patch_size = None
+    patch_size_choices = naflex_data_config.train_patch_sizes
+    if not naflex_data_config.variable_patch_size:
+        patch_size = patch_size_choices[0]
+        patch_size_choices = None
+    max_tokens_per_batch = naflex_data_config.resolve_max_tokens_per_batch(
+        args.batch_size,
+        per_row_text_tokens=per_row_text_tokens,
+    )
+
+    stages = [
+        map_no_key(tokenize_text.map_sample, handler=log_and_continue)
+        if getattr(tokenize_text, 'output_mask', False) else wds.map_dict(text=tokenize_text)
+    ]
+    if bucketer is not None:
+        # Reorder samples so similar lengths batch together (text for image, audio_tokens for audio),
+        # tightening per-batch-max padding. Reorder-only -> schedule / num_batches / DDP unchanged. The caller
+        # owns the bucketer choice + policy (a LengthBucketer with the right length_fns per the model type).
+        stages.append(bucketer)
+    stages.append(NaFlexBatcher(
+        train_num_samples=num_samples,
+        train_num_tokens=num_tokens,
+        patch_size=patch_size,
+        patch_size_choices=patch_size_choices,
+        patch_size_choice_probs=naflex_data_config.train_patch_size_probs,
+        model_patch_size=naflex_data_config.model_patch_size,
+        seq_lens=naflex_data_config.train_seq_lens,
+        seq_len_choice_probs=naflex_data_config.train_seq_len_probs,
+        max_tokens_per_batch=max_tokens_per_batch,
+        transform_factory=transform_factory,
+        seed=args.seed,
+        shuffle=True,
+        distributed=args.distributed,
+        rank=args.rank,
+        world_size=args.world_size,
+        epoch=shared_epoch,
+        batch_divisor=naflex_data_config.batch_divisor,
+        primary_key=primary_key,
+        pad_id=pad_id,
+        per_row_text_tokens=per_row_text_tokens,
+        pad_multiple=pad_multiple,
+        text_pad_multiple=text_pad_multiple,
+        text_pad_cap=text_pad_cap,
+        decode_fn=decode_fn,
+        decode_error_handler=decode_error_handler,
+    ))
+    budget_source = "explicit" if naflex_data_config.max_tokens_per_batch is not None else "inferred"
+    _logger.info(
+        f"NaFlex batch budget = {max_tokens_per_batch} tokens/local batch ({budget_source}; "
+        f"{primary_key} bucket"
+        + (f" + text cap {per_row_text_tokens}" if per_row_text_tokens else "")
+        + ")"
+        + ("; length bucketing ON" if bucketer is not None else "")
+    )
+    pipeline.extend(stages)
+    return pipeline[-1]
+
+
+def naflex_loader_counts(batcher, args):
+    """NaFlex epoch counts come from the batcher's deterministic schedule (no with_epoch / fixed-batch math)."""
+    num_workers = max(1, args.workers)
+    return batcher.num_batches_for_workers(num_workers), batcher.num_samples_for_workers(num_workers)
+
+
+def get_wds_sizes(args, input_shards, is_train, num_tokens=None):
+    """Resolve sample/shard counts; image NaFlex may instead specify a training token budget."""
+    num_shards = None
+    if is_train:
+        if num_tokens is not None:
+            if args.train_num_samples is not None:
+                raise ValueError("Specify only one of `--train-num-samples` or `--naflex-num-train-image-tokens`.")
+            num_samples = None
+        elif args.train_num_samples is not None:
+            num_samples = args.train_num_samples
+        else:
+            num_samples, num_shards = get_dataset_size(input_shards)
+            if not num_samples:
+                raise RuntimeError(
+                    'Currently, the number of dataset samples must be specified for the training dataset. '
+                    'Please specify it via `--train-num-samples` if no dataset length info is present.')
+    else:
+        # Evaluation exhausts the iterator when no size is specified.
+        num_samples = args.val_num_samples or 0
+    return num_samples, num_shards
+
+
+def wds_shard_head(
+        args, input_shards, is_train, resampled, shared_epoch, *, repeat=False, num_shards=None,
+):
+    """Build the shared shard source, worker splitting, tar extraction, and raw-sample shuffle."""
+    if is_train and args.train_data_upsampling_factors is not None:
+        assert resampled, (
+            "--train_data_upsampling_factors is only supported when sampling with replacement "
+            "(with --dataset-resampled)."
+        )
+    if is_train and not resampled:
+        num_shards = num_shards or len(expand_urls(input_shards)[0])
+        assert num_shards >= args.workers * args.world_size, 'number of shards must be >= total workers'
+    if resampled:
+        pipeline = [ResampledShards2(
+            input_shards, weights=args.train_data_upsampling_factors, deterministic=True, epoch=shared_epoch,
+        )]
+    elif repeat:
+        pipeline = [RepeatedShardList(input_shards)]
+    else:
+        pipeline = [wds.SimpleShardList(expand_urls(input_shards)[0])]
+
+    if is_train:
+        shard_size, shard_initial, sample_size, sample_initial = wds_shuffle_sizes()
+        if not resampled:
+            pipeline.extend([
+                detshuffle2(bufsize=shard_size, initial=shard_initial, seed=args.seed, epoch=shared_epoch),
+                wds.split_by_node,
+                wds.split_by_worker,
+            ])
+        pipeline.extend([
+            tarfile_to_samples_nothrow,
+            wds.shuffle(bufsize=sample_size, initial=sample_initial),
+        ])
+    else:
+        pipeline.extend([wds.split_by_worker, wds.tarfile_to_samples(handler=log_and_continue)])
+    return pipeline
+
+
+def create_wds_loader(
+        dataset, args, is_train, num_samples, shared_epoch, *, floor=False, naflex_batcher=None, **loader_kwargs,
+):
+    """Apply epoch sizing to an already-batched pipeline and retain loader count metadata."""
+    if naflex_batcher is not None:
+        num_batches, num_samples = naflex_loader_counts(naflex_batcher, args)
+    elif is_train:
+        # Round to full batches on every worker/rank, repeating samples when rounding up.
+        round_fn = math.floor if floor else math.ceil
+        global_batch_size = args.batch_size * args.world_size
+        num_batches = round_fn(num_samples / global_batch_size)
+        num_workers = max(1, args.workers)
+        num_worker_batches = round_fn(num_batches / num_workers)
+        num_batches = num_worker_batches * num_workers
+        num_samples = num_batches * global_batch_size
+        dataset = dataset.with_epoch(num_worker_batches)
+    else:
+        num_batches = math.ceil(num_samples / args.batch_size)
+
+    dataloader = wds.WebLoader(
+        dataset, batch_size=None, shuffle=False, num_workers=args.workers,
+        persistent_workers=args.workers > 0 and getattr(args, 'persistent_workers', True),
+        **loader_kwargs,
+    )
+    dataloader.num_batches = num_batches
+    dataloader.num_samples = num_samples
+    return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch)
+
+
+def get_wds_dataset(
+        args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None, naflex_data_config=None,
+        model_traits=None,
+):
+    input_shards = args.train_data if is_train else args.val_data
+    assert input_shards is not None
+    resampled = getattr(args, 'dataset_resampled', False) and is_train
+    use_naflex_train = naflex_data_config is not None and is_train
+    use_naflex_eval = naflex_data_config is not None and not is_train
+
+    num_image_tokens = naflex_data_config.train_num_image_tokens if use_naflex_train else None
+    num_samples, num_shards = get_wds_sizes(args, input_shards, is_train, num_tokens=num_image_tokens)
+    shared_epoch = SharedEpoch(epoch=epoch)
+
+    if use_naflex_train:
+        require_naflex()
+        if not getattr(preprocess_img, 'is_naflex_transform_factory', False):
+            raise ValueError("NaFlex WebDataset training requires `--aug-cfg use_timm=True naflex=True`.")
+    elif use_naflex_eval:
+        preprocess_img, naflex_max_seq_len, _ = create_naflex_eval_transform(preprocess_img, naflex_data_config)
+
+    pipeline = wds_shard_head(
+        args, input_shards, is_train, resampled, shared_epoch, repeat=use_naflex_train, num_shards=num_shards,
+    )
+    # GenLIP budgets variable captions with image tokens. Other variable-text towers only need batch-time padding.
+    text_in_budget, variable_text = resolve_text_layout(args, model_traits)
+    text_pad_id = get_text_pad_id(tokenizer) if variable_text else None
+    text_pad_multiple = getattr(args, 'text_pad_multiple', None)
+    text_pad_cap = getattr(tokenizer, 'context_length', None)
+    naflex_pad_id = text_pad_id
+    naflex_text_cost = (getattr(tokenizer, 'context_length', 0) or 0) if text_in_budget else 0
+    output_text_mask = bool(getattr(args, 'text_attention_mask', None)) and not variable_text
+    tokenize_text = TokenizeText(tokenizer, variable=variable_text, output_mask=output_text_mask)
+
+    # Length bucketing reorders by caption length (train-only; only meaningful for variable text).
+    use_bucketing = is_train and variable_text and getattr(args, 'length_bucketing', False)
+
+    # Image decode runs *after* tokenize and the optional length bucketer (see decode_pil_rgb below): the
+    # bucketer pools `--bucket-pool` complete samples per worker, so it must see raw, undecoded samples (the
+    # same regime as the raw-sample shuffle above) -- a pool of decoded full-resolution images is 10-50x
+    # larger and can OOM dataloader workers on hi-res data. One ordering for all branches, bucketed or not;
+    # the decode-first assembly lives in legacy_data.py.
+    image_key = getattr(args, 'image_key', DEFAULT_IMAGE_KEY) or DEFAULT_IMAGE_KEY
+    text_key = getattr(args, 'text_key', 'txt') or 'txt'
+    json_text_key = getattr(args, 'json_text_key', None)
+    if json_text_key:
+        # Read the caption from a field of each sample's .json (datasets without a text member, e.g. monet).
+        pipeline.extend([
+            wds.select(FilterValidSample(json_text_key=json_text_key, image_key=image_key)),
+            wds.rename(image=image_key, text="json", keep=False),
+            wds.map_dict(
+                text=JsonCaptionExtractor(json_text_key, sample_probs=getattr(args, 'json_text_key_probs', None)),
+                handler=log_and_continue,  # parses raw bytes itself
+            ),
+            wds.select(FilterNonEmptyText()),
+        ])
+    else:
+        # Read the caption from a tar member (default 'txt'; --text-key allows alternatives like 'txt;caption').
+        # Plain-text members only (TokenizeText utf-8 decodes the raw bytes); json captions use --json-text-key.
+        pipeline.extend([
+            wds.select(FilterValidSample(text_key=text_key, image_key=image_key)),
+            wds.rename(image=image_key, text=text_key, keep=False),
+            wds.select(FilterNonEmptyText()),
+        ])
+    image_max_pixels = getattr(args, 'max_image_pixels', 0) or None  # 0 -> None (no cap; high-res runs)
+    decode_pil = partial(decode_pil_rgb, max_pixels=image_max_pixels)
+    decode_image = wds.map_dict(image=decode_pil, handler=log_and_continue)
+
+    naflex_batcher = None
+    if use_naflex_train:
+        # Image NaFlex resizes images to ~fill the bucket, so caption length is the only optional bucketing signal.
+        image_bucketer = None
+        if use_bucketing:
+            image_bucketer = LengthBucketer(
+                length_fns=[CaptionLength(key="text")],
+                pool=args.bucket_pool,
+                chunk=args.bucket_chunk,
+                seed=args.seed,
+                epoch=shared_epoch,
+                prefetch_pools=getattr(args, 'bucket_prefetch_pools', 0),
+            )
+        naflex_batcher = append_naflex_train_stages(
+            pipeline,
+            naflex_data_config=naflex_data_config,
+            transform_factory=preprocess_img,
+            tokenize_text=tokenize_text,
+            primary_key="image",
+            num_samples=num_samples,
+            num_tokens=num_image_tokens,
+            args=args,
+            shared_epoch=shared_epoch,
+            pad_id=naflex_pad_id,
+            per_row_text_tokens=naflex_text_cost,
+            bucketer=image_bucketer,
+            decode_fn=decode_pil,  # decode (+ max-pixels cap) runs inside the batcher loop, one image at a time
+            decode_error_handler=log_and_continue,
+            pad_multiple=getattr(args, 'naflex_pad_multiple', None),
+            text_pad_multiple=text_pad_multiple,
+            text_pad_cap=text_pad_cap,
+        )
+        dataset = wds.DataPipeline(*pipeline)
+    elif use_naflex_eval:
+        pipeline.append(decode_image)
+        if output_text_mask:
+            pipeline.extend([
+                map_no_key(tokenize_text.map_sample, handler=log_and_continue),
+                wds.map_dict(image=preprocess_img),
+            ])
+        else:
+            pipeline.append(wds.map_dict(image=preprocess_img, text=tokenize_text))
+        pipeline.append(
+            wds.batched(
+                args.batch_size,
+                partial=True,
+                collation_fn=partial(
+                    collate_naflex_dicts,
+                    max_seq_len=naflex_max_seq_len,
+                    pad_id=naflex_pad_id,
+                    text_pad_multiple=text_pad_multiple,
+                    text_pad_cap=text_pad_cap,
+                ),
+            )
+        )
+        dataset = wds.DataPipeline(*pipeline)
+    else:
+        if variable_text:
+            collate_fn = partial(
+                collate_variable_text_dicts,
+                pad_id=text_pad_id,
+                text_pad_multiple=text_pad_multiple,
+                text_pad_cap=text_pad_cap,
+            )
+        else:
+            collate_fn = default_collate
+        # Tokenize -> [bucket] -> decode -> transform -> batch. Bucketing reorders by caption length so
+        # similar-length captions batch together: tighter per-batch-max text padding and fewer distinct
+        # text shapes (stacks with --text-pad-multiple).
+        # Sample-level map when emitting attention masks (the mask needs its own sample key).
+        stages = [
+            map_no_key(tokenize_text.map_sample, handler=log_and_continue)
+            if output_text_mask else wds.map_dict(text=tokenize_text)
+        ]
+        if use_bucketing:
+            stages.append(LengthBucketer(
+                length_fns=[CaptionLength(key="text")],
+                pool=args.bucket_pool,
+                chunk=args.bucket_chunk,
+                seed=args.seed,
+                epoch=shared_epoch,
+                prefetch_pools=getattr(args, 'bucket_prefetch_pools', 0),
+            ))
+        stages.extend([
+            decode_image,
+            wds.map_dict(image=preprocess_img),
+            wds.batched(args.batch_size, partial=not is_train, collation_fn=collate_fn),
+        ])
+        pipeline.extend(stages)
+        dataset = wds.DataPipeline(*pipeline)
+
+    return create_wds_loader(
+        dataset, args, is_train, num_samples, shared_epoch, floor=floor, naflex_batcher=naflex_batcher,
+    )
+
+
+def create_map_loader(dataset, args, is_train, *, collate_fn=None, **loader_kwargs):
+    """Standard fixed-batch loader for map-style image and audio datasets."""
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    dataloader = DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=is_train and sampler is None,
+        num_workers=args.workers, pin_memory=True, sampler=sampler,
+        drop_last=is_train, collate_fn=collate_fn, **loader_kwargs,
+    )
+    dataloader.num_samples = len(dataset)
+    dataloader.num_batches = len(dataloader)
+    return DataInfo(dataloader, sampler)
+
+
+def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None, naflex_data_config=None, model_traits=None):
+    input_filename = args.train_data if is_train else args.val_data
+    assert input_filename
+    shared_epoch = SharedEpoch(epoch=epoch)
+    use_naflex_train = naflex_data_config is not None and is_train
+    use_naflex_eval = naflex_data_config is not None and not is_train
+    text_in_budget, variable_text = resolve_text_layout(args, model_traits)
+    text_pad_id = get_text_pad_id(tokenizer) if variable_text else None
+    text_pad_multiple = getattr(args, 'text_pad_multiple', None)
+    text_pad_cap = getattr(tokenizer, 'context_length', None)
+    collate_fn = default_collate
+
+    if use_naflex_train:
+        require_naflex()
+        if not getattr(preprocess_fn, 'is_naflex_transform_factory', False):
+            raise ValueError("NaFlex CSV training requires `--aug-cfg use_timm=True naflex=True`.")
+        dataset_transform = None
+    elif use_naflex_eval:
+        dataset_transform, naflex_max_seq_len, _ = create_naflex_eval_transform(preprocess_fn, naflex_data_config)
+        collate_fn = partial(
+            collate_naflex_dicts, max_seq_len=naflex_max_seq_len, pad_id=text_pad_id,
+            text_pad_multiple=text_pad_multiple, text_pad_cap=text_pad_cap,
+        )
+    else:
+        dataset_transform = preprocess_fn
+        if variable_text:
+            collate_fn = partial(
+                collate_variable_text_dicts, pad_id=text_pad_id,
+                text_pad_multiple=text_pad_multiple, text_pad_cap=text_pad_cap,
+            )
+
+    dataset = CsvDataset(
+        input_filename,
+        dataset_transform,
+        img_key=args.csv_img_key,
+        caption_key=args.csv_caption_key,
+        sep=args.csv_separator,
+        tokenizer=tokenizer,
+        variable_text=variable_text,
+        output_text_mask=bool(getattr(args, 'text_attention_mask', None)) and not variable_text,
+    )
+
+    if use_naflex_train:
+        naflex_patch_size = None
+        naflex_patch_size_choices = naflex_data_config.train_patch_sizes
+        if not naflex_data_config.variable_patch_size:
+            naflex_patch_size = naflex_patch_size_choices[0]
+            naflex_patch_size_choices = None
+        # Only the token-budget trait charges captions to the row; variable text alone just changes padding.
+        naflex_pad_id = text_pad_id
+        naflex_text_cost = (getattr(tokenizer, 'context_length', 0) or 0) if text_in_budget else 0
+        max_tokens_per_batch = naflex_data_config.resolve_max_tokens_per_batch(
+            args.batch_size,
+            per_row_text_tokens=naflex_text_cost,
+        )
+        dataset = NaFlexMapDatasetWrapper(
+            dataset,
+            train_num_tokens=naflex_data_config.train_num_image_tokens,
+            patch_size=naflex_patch_size,
+            patch_size_choices=naflex_patch_size_choices,
+            patch_size_choice_probs=naflex_data_config.train_patch_size_probs,
+            model_patch_size=naflex_data_config.model_patch_size,
+            seq_lens=naflex_data_config.train_seq_lens,
+            seq_len_choice_probs=naflex_data_config.train_seq_len_probs,
+            max_tokens_per_batch=max_tokens_per_batch,
+            transform_factory=preprocess_fn,
+            seed=args.seed,
+            shuffle=True,
+            distributed=args.distributed,
+            rank=args.rank,
+            world_size=args.world_size,
+            epoch=shared_epoch,
+            batch_divisor=naflex_data_config.batch_divisor,
+            pad_id=naflex_pad_id,
+            per_row_text_tokens=naflex_text_cost,
+            text_pad_multiple=text_pad_multiple,
+            text_pad_cap=text_pad_cap,
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+            persistent_workers=args.workers > 0 and getattr(args, 'persistent_workers', True),
+        )
+        num_workers = max(1, args.workers)
+        dataloader.num_samples = dataset.num_samples_for_workers(num_workers)
+        dataloader.num_batches = dataset.num_batches_for_workers(num_workers)
+        return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch)
+
+    return create_map_loader(dataset, args, is_train, collate_fn=collate_fn)
+
+
+class SyntheticDataset(Dataset):
+
+    def __init__(
+            self,
+            transform=None,
+            image_size=(224, 224),
+            caption="Dummy caption",
+            dataset_size=100,
+            tokenizer=None,
+            variable_text: bool = False,
+            output_text_mask: bool = False,
+    ):
+        self.transform = transform
+        self.image_size = image_size
+        self.caption = caption
+        self.image = Image.new('RGB', image_size)
+        self.dataset_size = dataset_size
+
+        self.preprocess_txt = TokenizeText(tokenizer, variable=variable_text, output_mask=output_text_mask)
+
+    def __len__(self):
+        return self.dataset_size
+
+    def __getitem__(self, idx):
+        image = self.transform(self.image) if self.transform is not None else self.image
+        sample = {"image": image, "text": self.caption}
+        return self.preprocess_txt.map_sample(sample)
+
+
+def get_synthetic_dataset(
+        args, preprocess_fn, is_train, epoch=0, tokenizer=None, naflex_data_config=None, model_traits=None,
+):
+    image_size = preprocess_fn.transforms[0].size
+    _, variable_text = resolve_text_layout(args, model_traits)
+    collate_fn = (
+        partial(
+            collate_variable_text_dicts, pad_id=get_text_pad_id(tokenizer),
+            text_pad_multiple=getattr(args, 'text_pad_multiple', None),
+            text_pad_cap=getattr(tokenizer, 'context_length', None),
+        )
+        if variable_text else default_collate
+    )
+    dataset = SyntheticDataset(
+        transform=preprocess_fn,
+        image_size=image_size,
+        dataset_size=args.train_num_samples,
+        tokenizer=tokenizer,
+        variable_text=variable_text,
+        output_text_mask=bool(getattr(args, 'text_attention_mask', None)) and not variable_text,
+    )
+    return create_map_loader(dataset, args, is_train, collate_fn=collate_fn)
+
+
+def get_dataset_fn(data_path, dataset_type):
+    if dataset_type == "webdataset":
+        return get_wds_dataset
+    elif dataset_type == "webdataset-audio":
+        from open_clip_train.audio_data import get_wds_audio_dataset
+        return get_wds_audio_dataset
+    elif dataset_type == "csv":
+        return get_csv_dataset
+    elif dataset_type == "synthetic":
+        return get_synthetic_dataset
+    elif dataset_type == "synthetic-audio":
+        from open_clip_train.audio_data import get_synthetic_audio_dataset
+        return get_synthetic_audio_dataset
+    elif dataset_type == "auto":
+        ext = data_path.split('.')[-1]
+        if ext in ['csv', 'tsv']:
+            return get_csv_dataset
+        elif ext in ['tar']:
+            return get_wds_dataset
+        else:
+            raise ValueError(
+                f"Tried to figure out dataset type, but failed for extension {ext}.")
+    else:
+        raise ValueError(f"Unsupported dataset type: {dataset_type}")
+    
+
+def get_data(args, preprocess_fns, model_traits, epoch=0, tokenizer=None, naflex_data_config=None):
+    preprocess_train, preprocess_val = preprocess_fns
+    data = {}
+
+    if getattr(args, 'use_naflex', False) and naflex_data_config is None:
+        raise ValueError("NaFlex data loaders require a NaFlex data config.")
+    if not getattr(args, 'use_naflex', False) and getattr(args, 'naflex_num_train_image_tokens', None) is not None:
+        warnings.warn("`--naflex-num-train-image-tokens` is ignored unless `--use-naflex` is set.")
+
+    if args.train_data or args.dataset_type in ("synthetic", "synthetic-audio"):
+        data["train"] = get_dataset_fn(args.train_data, args.dataset_type)(
+            args,
+            preprocess_train,
+            is_train=True,
+            epoch=epoch,
+            tokenizer=tokenizer,
+            naflex_data_config=naflex_data_config,
+            model_traits=model_traits,
+        )
+
+    if args.val_data:
+        data["val"] = get_dataset_fn(args.val_data, args.dataset_type)(
+            args,
+            preprocess_val,
+            is_train=False,
+            tokenizer=tokenizer,
+            naflex_data_config=naflex_data_config,
+            model_traits=model_traits,
+        )
+
+    if args.imagenet_val is not None:
+        data["imagenet-val"] = get_imagenet(
+            args,
+            preprocess_fns,
+            "val",
+            naflex_data_config=naflex_data_config,
+        )
+
+    if args.imagenet_v2 is not None:
+        data["imagenet-v2"] = get_imagenet(
+            args,
+            preprocess_fns,
+            "v2",
+            naflex_data_config=naflex_data_config,
+        )
+
+    return data

@@ -1,0 +1,7 @@
+{
+  "package": "torchscale",
+  "version": "0.2.0",
+  "source": "https://pypi.org/project/torchscale/0.2.0/",
+  "sha256": "ca0a3982d799d6b91320a538a6cc17ea9ccb6370231934805fae78f318fe4d2f",
+  "reason": "matches official beit3 requirements.txt; downloaded for source reading, not installed"
+}

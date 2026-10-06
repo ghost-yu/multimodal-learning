@@ -1,0 +1,11 @@
+{
+  "model": "TinyCLIP from scratch",
+  "train_images": 64,
+  "validation_images": 16,
+  "epochs": 80,
+  "batch_size": 8,
+  "before_validation_image_to_text_r1": 0.0625,
+  "before_validation_text_to_image_r1": 0.0625,
+  "after_validation_image_to_text_r1": 0.1875,
+  "after_validation_text_to_image_r1": 0.125
+}

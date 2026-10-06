@@ -1,0 +1,27 @@
+{
+  "commit": "2d5346092bf447ff73a782d372a8e018fb269ffc",
+  "files": [
+    {
+      "file": "src/open_clip/coca_model.py",
+      "executable_ast_equals_git_head_ignoring_docs": true
+    },
+    {
+      "file": "src/open_clip/task/coca_task.py",
+      "executable_ast_equals_git_head_ignoring_docs": true
+    },
+    {
+      "file": "src/open_clip/transformer.py",
+      "executable_ast_equals_git_head_ignoring_docs": true
+    },
+    {
+      "file": "src/open_clip/loss.py",
+      "executable_ast_equals_git_head_ignoring_docs": true
+    },
+    {
+      "file": "src/open_clip/generation.py",
+      "executable_ast_equals_git_head_ignoring_docs": true
+    }
+  ],
+  "runtime_evidence": "复现/outputs/小型CoCa检查.json",
+  "original_scale_reproduced": false
+}

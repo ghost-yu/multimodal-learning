@@ -1,0 +1,16 @@
+{
+  "torch_version": "2.6.0+cu124",
+  "scope": "Actual AST-extracted top2gating and mergelayer only; not full model",
+  "noise_policy": null,
+  "selected_experts": [
+    0,
+    1
+  ],
+  "normalized_gates": [
+    0.625,
+    0.375
+  ],
+  "fused_output": 7.75,
+  "matches_separate_linear_experts": true,
+  "gate_logits_gradient_finite_nonzero": true
+}

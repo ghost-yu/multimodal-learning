@@ -1,0 +1,21 @@
+{
+  "paper": "arXiv:2211.09808v1",
+  "local_pages": 14,
+  "local_repo_head": "a8c9e37ae25d9526a208c8f7d4403f32f99e7a72",
+  "checked_paths": [
+    "README.md",
+    "uniperceiver/",
+    "configs/"
+  ],
+  "searched_terms": [
+    "MTAdam",
+    "MT-Adam",
+    "MaskDINO",
+    "proposal",
+    "swin"
+  ],
+  "official_readme_url": "https://github.com/fundamentalvision/Uni-Perceiver",
+  "confirmed_v2_implementation": false,
+  "limit": "No confirmed complete v2 implementation in checked official/local sources; not proof that no third-party code exists",
+  "document_local_links_valid": true
+}

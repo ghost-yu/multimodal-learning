@@ -1,0 +1,19 @@
+{
+  "paper": "Uni-Perceiver-v2",
+  "original_pages": 14,
+  "full_quality_review": false,
+  "outputs": [
+    {
+      "file": "中文论文.pdf",
+      "pages": 14,
+      "all_pages_text_readable": true,
+      "first_page_chinese_chars": 851
+    },
+    {
+      "file": "双语论文.pdf",
+      "pages": 28,
+      "all_pages_text_readable": true,
+      "first_page_chinese_chars": 0
+    }
+  ]
+}

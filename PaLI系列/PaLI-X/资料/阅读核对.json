@@ -1,0 +1,27 @@
+{
+  "paper_version": "arXiv:2305.18565v1",
+  "original_pages": 30,
+  "read_main_tables": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "read_appendix_focus": [
+    "OCR bag-of-words",
+    "few-shot reweighting",
+    "classification Table25/26",
+    "detection prompt format"
+  ],
+  "local_links_valid": true,
+  "original_model_run": false,
+  "remaining": [
+    "full responsible-AI tables",
+    "remaining appendix details",
+    "original source release scope",
+    "translation full review"
+  ]
+}

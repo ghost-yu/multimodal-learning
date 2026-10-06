@@ -1,0 +1,9 @@
+{
+  "paper_version": "arXiv:2209.06794v4",
+  "original_pages": 33,
+  "covered": "Main methods and Tables 1-8, Appendix A.1-A.2; remaining appendix detail pending",
+  "full_model_reproduced": false,
+  "reference_repo_head": "0127fb6b337ee2a27bf4e54dea79cff176527356",
+  "reference_model": "PaliGemma; not original PaLI",
+  "all_local_document_links_valid": true
+}

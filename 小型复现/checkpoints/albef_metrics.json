@@ -1,0 +1,10 @@
+{
+  "model": "albef",
+  "train_images": 64,
+  "validation_images": 16,
+  "epochs": 80,
+  "train_loss": 0.3580086105503142,
+  "train_accuracy": 0.90625,
+  "validation_loss": 4.833926737308502,
+  "validation_accuracy": 0.5625
+}

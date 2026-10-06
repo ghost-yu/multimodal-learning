@@ -1,0 +1,1053 @@
+import argparse
+import ast
+
+
+def get_default_params(model_name):
+    # Params from paper (https://arxiv.org/pdf/2103.00020.pdf)
+    model_name = model_name.lower()
+    if "vit" in model_name:
+        return {"lr": 5.0e-4, "beta1": 0.9, "beta2": 0.98, "eps": 1.0e-6}
+    else:
+        return {"lr": 5.0e-4, "beta1": 0.9, "beta2": 0.999, "eps": 1.0e-8}
+
+
+class ParseKwargs(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        kw = {}
+        for value in values:
+            if not value:
+                continue
+            key, value = value.split('=')
+            try:
+                kw[key] = ast.literal_eval(value)
+            except ValueError:
+                kw[key] = str(value)  # fallback to string (avoid need to escape on command line)
+        setattr(namespace, self.dest, kw)
+
+
+def parse_args(args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--train-data",
+        type=str,
+        default=None,
+        help="Path to file(s) with training data. When using webdataset, multiple datasources can be combined using the `::` separator.",
+    )
+    parser.add_argument(
+        "--train-data-upsampling-factors",
+        type=str,
+        default=None,
+        help=(
+            "When using multiple data sources with webdataset and sampling with replacement, this can be used to upsample specific data sources. "
+            "Similar to --train-data, this should be a string with as many numbers as there are data sources, separated by `::` (e.g. 1::2::0.5) "
+            "By default, datapoints are sampled uniformly regardless of the dataset sizes."
+        )
+    )
+    parser.add_argument(
+        "--val-data",
+        type=str,
+        default=None,
+        help="Path to file(s) with validation data",
+    )
+    parser.add_argument(
+        "--train-num-samples",
+        type=int,
+        default=None,
+        help="Number of samples in dataset. Required for webdataset if not available in info file.",
+    )
+    parser.add_argument(
+        "--val-num-samples",
+        type=int,
+        default=None,
+        help="Number of samples in dataset. Useful for webdataset if not available in info file.",
+    )
+    parser.add_argument(
+        "--dataset-type",
+        choices=["webdataset", "webdataset-audio", "csv", "synthetic", "synthetic-audio", "auto"],
+        default="auto",
+        help="Which type of dataset to process."
+    )
+    parser.add_argument(
+        "--audio-ext",
+        type=str,
+        default="flac",
+        help="Audio file extension in WebDataset shards (wav, flac, mp3, ogg)."
+    )
+    parser.add_argument(
+        "--pretrained-audio",
+        type=str,
+        default=None,
+        help="Path to pretrained audio encoder checkpoint."
+    )
+    parser.add_argument(
+        "--audio-fill",
+        type=str,
+        default="repeatpad",
+        choices=["pad", "repeat", "repeatpad"],
+        help="How to fill audio shorter than clip_samples."
+    )
+    parser.add_argument(
+        "--audio-trunc",
+        type=str,
+        default="rand_trunc",
+        choices=["rand_trunc", "trunc", "fusion"],
+        help="How to truncate audio longer than clip_samples."
+    )
+    parser.add_argument(
+        "--audio-fusion",
+        default=False,
+        action="store_true",
+        help="Enable HTSAT fusion preprocessing for longer audio clips."
+    )
+    parser.add_argument(
+        "--audio-int16-normalize",
+        default=False,
+        action="store_true",
+        help="Apply int16 quantization normalization in audio preprocessing."
+    )
+    parser.add_argument(
+        "--audio-zeroshot-dataset",
+        type=str,
+        default=None,
+        help="Hugging Face audio classification dataset for CLAP zero-shot eval, e.g. ashraq/esc50.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-split",
+        type=str,
+        default="train",
+        help="Dataset split for audio zero-shot eval.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-audio-key",
+        type=str,
+        default="audio",
+        help="Audio column name for audio zero-shot eval.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-target-key",
+        type=str,
+        default="target",
+        help="Target column name for audio zero-shot eval.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-class-key",
+        type=str,
+        default="category",
+        help="Optional class-name column for audio zero-shot eval.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-template",
+        dest="audio_zeroshot_templates",
+        action="append",
+        default=None,
+        help="Prompt template for audio zero-shot eval. May be passed multiple times; must contain {}.",
+    )
+    parser.add_argument(
+        "--audio-zeroshot-workers",
+        type=int,
+        default=0,
+        help=(
+            "DataLoader workers for Hugging Face audio zero-shot eval. Defaults to 0 until multiprocessing "
+            "contexts are tested more broadly."
+        ),
+    )
+    parser.add_argument(
+        "--audio-zeroshot-multiprocessing-context",
+        type=str,
+        default="forkserver",
+        choices=["fork", "forkserver", "spawn"],
+        help="Multiprocessing context for audio zero-shot DataLoader workers.",
+    )
+    parser.add_argument(
+        "--audio-multiprocessing-context",
+        type=str,
+        default="forkserver",
+        choices=["fork", "forkserver", "spawn"],
+        help="Multiprocessing context for the (training/eval) audio DataLoader workers. forkserver avoids the "
+             "fork-after-torchaudio-threads deadlock; only applied when --workers > 0.",
+    )
+    parser.add_argument(
+        "--dataset-resampled",
+        default=False,
+        action="store_true",
+        help="Whether to use sampling with replacement for webdataset shard selection."
+    )
+    parser.add_argument(
+        "--csv-separator",
+        type=str,
+        default="\t",
+        help="For csv-like datasets, which separator to use."
+    )
+    parser.add_argument(
+        "--csv-img-key",
+        type=str,
+        default="filepath",
+        help="For csv-like datasets, the name of the key for the image paths."
+    )
+    parser.add_argument(
+        "--csv-caption-key",
+        type=str,
+        default="title",
+        help="For csv-like datasets, the name of the key for the captions."
+    )
+    parser.add_argument(
+        "--image-key",
+        type=str,
+        default="jpg;png;jpeg;webp",
+        help="For image WebDataset datasets, the tar member suffix holding the image. "
+             "Accepts ';'-separated alternatives, e.g. 'jpg;png;jpeg;webp'."
+    )
+    parser.add_argument(
+        "--max-image-pixels",
+        type=int,
+        default=25_000_000,
+        help="Drop WebDataset images whose width*height exceeds this, checked from the header before the costly "
+             "decode. Default 25M px; 0 disables."
+    )
+    parser.add_argument(
+        "--text-key",
+        type=str,
+        default="txt",
+        help="For WebDataset datasets, the tar member suffix holding the caption text (default 'txt'). "
+             "Accepts ';'-separated alternatives, e.g. 'txt;caption'. Ignored when --json-text-key is set."
+    )
+    parser.add_argument(
+        "--json-text-key",
+        type=str,
+        default=None,
+        help="For WebDataset datasets, read the caption from this field of each sample's .json member instead "
+             "of a text file. Accepts ';'-separated priority alternatives, e.g. "
+             "'caption_florence-2-large;caption_sharegpt4v-7b'. Takes precedence over --text-key. Without "
+             "--json-text-key-probs the first non-empty key in order wins."
+    )
+    parser.add_argument(
+        "--json-text-key-probs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Sampling probabilities for --json-text-key caption keys, in the same order. Captions are drawn "
+             "into a random priority order by these weights, then the first non-empty wins. Unspecified/"
+             "trailing keys default to 0 (fallback only). Need not sum to 1."
+    )
+    parser.add_argument(
+        "--imagenet-val",
+        type=str,
+        default=None,
+        help="Path to imagenet val set for conducting zero shot evaluation.",
+    )
+    parser.add_argument(
+        "--imagenet-v2",
+        type=str,
+        default=None,
+        help="Path to imagenet v2 for conducting zero shot evaluation.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Override system default cache path for model & tokenizer file downloads.",
+    )
+    parser.add_argument(
+        "--logs",
+        type=str,
+        default="./logs/",
+        help="Where to store tensorboard logs. Use None to avoid storing logs.",
+    )
+    parser.add_argument(
+        "--log-local",
+        action="store_true",
+        default=False,
+        help="log files on local master, otherwise global master only.",
+    )
+    parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Optional identifier for the experiment when storing logs. Otherwise use current time.",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=4, help="Number of dataloader workers per GPU."
+    )
+    parser.add_argument(
+        "--persistent-workers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep DataLoader workers alive across epochs (faster epoch starts). Use --no-persistent-workers to "
+             "tear them down each epoch -- frees the training data-loading buffers (shuffle/bucket pools, prefetch "
+             "threads) before zero-shot eval, avoiding the train->eval memory spike; the re-warm cost is small "
+             "relative to large epochs. No effect when --workers 0."
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=64,
+        help="Batch size per GPU. For NaFlex training, this is the reference batch size at the longest configured "
+             "sequence when --naflex-max-tokens-per-batch is unset (before --naflex-batch-divisor rounding)."
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=32, help="Number of epochs to train for."
+    )
+    parser.add_argument(
+        "--epochs-cooldown", type=int, default=None,
+        help="When scheduler w/ cooldown used, perform cooldown from total_epochs - cooldown_epochs onwards."
+    )
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate.")
+    parser.add_argument("--beta1", type=float, default=None, help="Adam beta 1.")
+    parser.add_argument("--beta2", type=float, default=None, help="Adam beta 2.")
+    parser.add_argument("--eps", type=float, default=None, help="Adam epsilon.")
+    parser.add_argument("--wd", type=float, default=0.2, help="Weight decay.")
+    parser.add_argument("--momentum", type=float, default=None, help="Momentum (for timm optimizers).")
+    parser.add_argument(
+        "--warmup", type=int, default=10000, help="Number of steps to warmup for."
+    )
+    parser.add_argument(
+        "--opt", type=str, default='adamw',
+        help="Which optimizer to use. Choices are ['adamw', 'nadamw' (torch NAdam w/ decoupled weight decay), "
+             "or any timm optimizer 'timm/{opt_name}']."
+    )
+    parser.add_argument(
+        "--opt-kwargs",
+        nargs="*",
+        default={},
+        action=ParseKwargs,
+        help="Additional optimizer keyword arguments, passed as key=value pairs. The fallback LR scale for "
+             "Muon-family optimizers goes here (e.g. fallback_lr_scale=0.5).",
+    )
+    parser.add_argument(
+        "--opt-fallback-list", type=str, nargs="*", default=None, metavar="PATTERN",
+        help="Param-name glob patterns routed to a hybrid optimizer's fallback (Muon-family timm opts only, e.g. "
+             "timm/nadamuon): matched params use the AdamW fallback instead of Muon. No effect for non-Muon "
+             "optimizers; invalid for torch optimizers. e.g. --opt-fallback-list 'text.transformer.embeddings.*' "
+             "'*.proj.*'."
+    )
+    parser.add_argument(
+        "--text-layer-decay", type=float, default=None,
+        help="Layer-wise LR decay for the text tower: lr(group) = lr * decay**(depth_from_head). Off when unset "
+             "(or 1.0). A gentle alternative to freezing a pretrained text encoder (e.g. 0.65)."
+    )
+    parser.add_argument(
+        "--image-layer-decay", "--visual-layer-decay", type=float, default=None, dest="image_layer_decay",
+        help="Layer-wise LR decay for the image tower (builtin ViT/ResNet or timm trunk): lr(group) = lr * "
+             "decay**(depth_from_head); the projection/adapter head stays at full LR. Off when unset (or 1.0)."
+    )
+    parser.add_argument(
+        "--audio-layer-decay", type=float, default=None,
+        help="Layer-wise LR decay for the audio tower (model.audio, e.g. a NaFlex spectrogram-ViT in CLAP): same "
+             "lr * decay**(depth_from_head) rule. Off when unset (or 1.0). Note: a from-scratch audio tower "
+             "usually wants full LR (leave off); this is for fine-tuning a pretrained audio encoder."
+    )
+    parser.add_argument(
+        "--wd-exclude", type=str, nargs="*", default=[], metavar="PATTERN", dest="wd_exclude_patterns",
+        help="Extra parameter-name glob patterns whose params skip weight decay, on top of the default rule "
+             "(1-D params + the model's no_weight_decay()). Matched against full param names with fnmatch, so use "
+             "'*' for substrings, e.g. --wd-exclude '*.bias' 'visual.proj*' '*pos_embed*'."
+    )
+    parser.add_argument(
+        "--text-pooler-own-group", dest="text_pooler_in_head", action="store_false",
+        help="Give the text readout pooler its own layer-wise-LR-decay / lock group, one step below the "
+             "projection head. Default (flag absent): fold the pooler into the projection head (full LR)."
+    )
+    parser.add_argument(
+        "--use-bn-sync",
+        default=False,
+        action="store_true",
+        help="Whether to use batch norm sync.")
+    parser.add_argument(
+        "--skip-scheduler",
+        action="store_true",
+        default=False,
+        help="Use this flag to skip the learning rate decay.",
+    )
+    parser.add_argument(
+        "--lr-scheduler",
+        type=str,
+        default='cosine',
+        help="LR scheduler. One of: 'cosine', 'const' (constant), 'const-cooldown' (constant w/ cooldown). Default: cosine",
+    )
+    parser.add_argument(
+        "--lr-cooldown-end", type=float, default=0.0,
+        help="End learning rate for cooldown schedule. Default: 0"
+    )
+    parser.add_argument(
+        "--lr-cooldown-power", type=float, default=1.0,
+        help="Power for polynomial cooldown schedule. Default: 1.0 (linear decay)"
+    )
+    parser.add_argument(
+        "--save-frequency", type=int, default=1, help="How often to save checkpoints."
+    )
+    parser.add_argument(
+        "--save-most-recent",
+        action="store_true",
+        default=False,
+        help="Always save the most recent model trained to epoch_latest.pt.",
+    )
+    parser.add_argument(
+        "--zeroshot-frequency", type=int, default=2, help="How often to run zero shot."
+    )
+    parser.add_argument(
+        "--val-frequency", type=int, default=1, help="How often to run evaluation with val data."
+    )
+    parser.add_argument(
+        "--val-retrieval-chunk-size",
+        type=int,
+        default=4096,
+        help=(
+            "Chunk size for exact validation retrieval metrics. Smaller values reduce peak "
+            "score-matrix memory; set 0 to score the full matrix in one CPU block."
+        ),
+    )
+    parser.add_argument(
+        "--val-retrieval-precision",
+        choices=["fp32", "model"],
+        default="fp32",
+        help=(
+            "Precision for validation retrieval scoring. 'fp32' casts score chunks to float32; "
+            "'model' keeps the feature tensor dtype."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        type=str,
+        help="path to latest checkpoint (default: none)",
+    )
+    parser.add_argument(
+        "--precision",
+        choices=["amp", "amp_bf16", "amp_bfloat16", "bf16", "fp16", "pure_bf16", "pure_fp16", "fp32"],
+        default="amp_bf16",
+        help="Floating point precision."
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="RN50",
+        help="Name of the vision backbone to use.",
+    )
+    parser.add_argument(
+        "--pretrained",
+        default='',
+        type=str,
+        help="Use a pretrained CLIP model weights with the specified tag or file path.",
+    )
+    parser.add_argument(
+        "--pretrained-image",
+        default=False,
+        action='store_true',
+        help="Load imagenet pretrained weights for image tower backbone if available.",
+    )
+    parser.add_argument(
+        "--lock-image",
+        default=False,
+        action='store_true',
+        help="Lock full image tower by disabling gradients.",
+    )
+    parser.add_argument(
+        "--lock-image-unlocked-groups",
+        type=int,
+        default=0,
+        help="Leave last n image tower layer groups unlocked.",
+    )
+    parser.add_argument(
+        "--lock-image-freeze-bn-stats",
+        default=False,
+        action='store_true',
+        help="Freeze BatchNorm running stats in image tower for any locked layers.",
+    )
+    parser.add_argument(
+        '--image-mean', type=float, nargs='+', default=None, metavar='MEAN',
+        help='Override default image mean value of dataset')
+    parser.add_argument(
+        '--image-std', type=float, nargs='+', default=None, metavar='STD',
+        help='Override default image std deviation of of dataset')
+    parser.add_argument(
+        '--image-interpolation',
+        default=None, type=str, choices=['bicubic', 'bilinear', 'random'],
+        help="Override default image resize interpolation"
+    )
+    parser.add_argument(
+        '--image-resize-mode',
+        default=None, type=str, choices=['shortest', 'longest', 'squash'],
+        help="Override default image resize (& crop) mode during inference"
+    )
+    parser.add_argument('--aug-cfg', nargs='*', default={}, action=ParseKwargs)
+    parser.add_argument(
+        "--grad-checkpointing",
+        default=False,
+        action='store_true',
+        help="Enable gradient checkpointing.",
+    )
+    parser.add_argument(
+        "--local-loss",
+        default=False,
+        action="store_true",
+        help="calculate loss w/ local features @ global (instead of realizing full global @ global matrix)"
+    )
+    parser.add_argument(
+        "--gather-with-grad",
+        default=False,
+        action="store_true",
+        help="enable full distributed gradient for feature gather"
+    )
+    parser.add_argument(
+        '--force-context-length', type=int, default=None,
+        help='Override default context length'
+    )
+    parser.add_argument(
+        '--force-image-size', type=int, nargs='+', default=None,
+        help='Override default image size'
+    )
+    parser.add_argument(
+        "--force-quick-gelu",
+        default=False,
+        action='store_true',
+        help="Force use of QuickGELU activation for non-OpenAI transformer models.",
+    )
+    parser.add_argument(
+        "--force-patch-dropout",
+        default=None,
+        type=float,
+        help="Override the patch dropout during training, for fine tuning with no dropout near the end as in the paper",
+    )
+    parser.add_argument(
+        "--force-custom-text",
+        default=False,
+        action='store_true',
+        help="Force use of CustomTextCLIP model (separate text-tower).",
+    )
+    parser.add_argument(
+        "--torchcompile",
+        default=False,
+        action='store_true',
+        help="Enable torch.compile, requires pytorch 2.0 or later.",
+    )
+    parser.add_argument(
+        "--torchcompile-strategy",
+        type=str,
+        default="task",
+        choices=["model", "task", "step", "blocks"],
+        help=(
+            "Compile strategy when --torchcompile is enabled: "
+            "'model' compiles trainable_module before distributed wrapping, "
+            "'task' compiles task train/eval forward callables, "
+            "'step' compiles the single-batch forward/backward/optimizer step, "
+            "'blocks' compiles transformer blocks in place (before distributed wrapping) so "
+            "grad-checkpoint recompute stays in eager autograd -- bounds compiled-backward "
+            "memory when whole-graph compile schedules checkpointed recomputes poorly."
+        ),
+    )
+    parser.add_argument(
+        "--torchcompile-backend",
+        type=str,
+        default=None,
+        help="Optional torch.compile backend, e.g. inductor or eager.",
+    )
+    parser.add_argument(
+        "--torchcompile-mode",
+        type=str,
+        default=None,
+        help="Optional torch.compile mode, e.g. default, reduce-overhead, or max-autotune.",
+    )
+    parser.add_argument(
+        "--torchcompile-dynamic",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Pass dynamic=True/False to torch.compile (default None = automatic). "
+             "--no-torchcompile-dynamic forces per-shape static graphs; pair it with "
+             "--text-pad-multiple / --naflex-pad-multiple so the shape set stays small -- "
+             "automatic dynamic otherwise switches to a symbolic graph on the second shape, "
+             "with worse memory planning.",
+    )
+    parser.add_argument(
+        "--torchcompile-pass-break",
+        default=False,
+        action='store_true',
+        help="Insert a dynamo graph break between the contrastive and caption passes of dual-pass "
+             "decoder models (MaMMUT) under full-graph compile. One graph holding two checkpointed "
+             "traversals of the same decoder blocks makes the compiled backward retain a multi-block "
+             "recompute working set (2-3.5x eager peak memory); breaking between the passes restores "
+             "eager-like memory at no measured speed cost. Not needed with "
+             "--torchcompile-strategy blocks (recompute already stays eager there).",
+    )
+    parser.add_argument(
+        "--accum-freq", type=int, default=1, help="Update the model every --acum-freq steps."
+    )
+    parser.add_argument(
+        "--device", default="cuda", type=str, help="Accelerator to use."
+    )
+    # arguments for distributed training
+    parser.add_argument(
+        "--dist-url",
+        default=None,
+        type=str,
+        help="url used to set up distributed training",
+    )
+    parser.add_argument(
+        "--dist-backend",
+        default=None,
+        type=str,
+        help="distributed backend. \"nccl\" for GPU, \"hccl\" for Ascend NPU"
+    )
+    parser.add_argument(
+        "--report-to",
+        default='',
+        type=str,
+        help="Comma-separated logging backends: 'wandb', 'trackio' (local-first, wandb-compatible), 'tensorboard'. "
+             "'wandb' and 'trackio' are mutually exclusive; either can be combined with 'tensorboard'."
+    )
+    parser.add_argument(
+        "--wandb-notes",
+        default='',
+        type=str,
+        help="Notes if logging with wandb"
+    )
+    parser.add_argument(
+        "--wandb-project-name",
+        type=str,
+        default='open-clip',
+        help="Name of the project if logging with wandb.",
+    )
+    parser.add_argument(
+        "--debug",
+        default=False,
+        action="store_true",
+        help="If true, more information is logged."
+    )
+    parser.add_argument(
+        "--copy-codebase",
+        default=False,
+        action="store_true",
+        help="If true, we copy the entire base on the log directory, and execute from there."
+    )
+    parser.add_argument(
+        "--ddp-static-graph",
+        default=False,
+        action='store_true',
+        help="Enable static graph optimization for DDP in PyTorch >= 1.11.",
+    )
+    parser.add_argument(
+        "--fsdp",
+        default=False,
+        action='store_true',
+        help="Use FSDP2 (fully_shard) instead of DDP for distributed training.",
+    )
+    parser.add_argument(
+        "--fsdp-no-reshard-after-forward",
+        default=False,
+        action='store_true',
+        help="Disable resharding parameters after forward pass. "
+             "Lower communication but higher memory.",
+    )
+    parser.add_argument(
+        "--fsdp-offload-cpu",
+        default=False,
+        action='store_true',
+        help="Offload FSDP parameters to CPU when not in use.",
+    )
+    parser.add_argument(
+        "--fsdp-checkpoint",
+        default="full",
+        type=str,
+        choices=["full", "sharded"],
+        help="FSDP checkpoint type. 'full' gathers to rank 0 as a single .pt file. "
+             "'sharded' uses DCP per-rank shards in a directory (faster, lower memory).",
+    )
+    parser.add_argument(
+        "--no-set-device-rank",
+        default=False,
+        action="store_true",
+        help="Don't set device index from local rank (when CUDA_VISIBLE_DEVICES restricted to one per proc)."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0, help="Default random seed."
+    )
+    parser.add_argument(
+        "--grad-clip-norm", type=float, default=None, help="Gradient clip."
+    )
+    parser.add_argument(
+        "--lock-text",
+        default=False,
+        action='store_true',
+        help="Lock full text tower by disabling gradients.",
+    )
+    parser.add_argument(
+        "--lock-text-unlocked-layers",
+        type=int,
+        default=0,
+        help="Leave last n text tower layer groups unlocked.",
+    )
+    parser.add_argument(
+        "--lock-text-freeze-layer-norm",
+        default=False,
+        action='store_true',
+        help="Freeze LayerNorm running stats in text tower for any locked layers.",
+    )
+    parser.add_argument(
+        "--log-every-n-steps",
+        type=int,
+        default=100,
+        help="Log every n steps to the console (the human-readable line).",
+    )
+    parser.add_argument(
+        "--log-metric-every-n-steps",
+        type=int,
+        default=10,
+        help="Log scalars to tensorboard/wandb every n steps (denser than the console for smooth curves). "
+             "Set 1 to log every step. The loss is all-reduced across ranks here so the logged value is the "
+             "true global-batch loss (under --local-loss each rank only sees a 1/world_size slice).",
+    )
+    parser.add_argument(
+        "--train-loss-ema-samples",
+        type=int,
+        default=50000,
+        help="Smoothing horizon (in samples) for the console loss EMA shown in parentheses. Robust to batch "
+             "size / accum / world size / NaFlex packing. 0 disables it (console parentheses revert to the "
+             "epoch running average).",
+    )
+    parser.add_argument(
+        "--text-attention-mask",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Emit a per-sample text validity mask (batch key 'text_valid', True = real token) from the "
+             "tokenizer into batches, consumed by generative models for attention/pooling and -100 "
+             "caption-label masking. Default (unset) auto-enables for CoCa/MaMMUT models (not distilled) "
+             "and stays off otherwise (CLIP-style contrastive models don't consume it)."
+    )
+    parser.add_argument(
+        "--coca-caption-loss-weight",
+        type=float,
+        default=2.0,
+        help="Weight assigned to caption loss in CoCa / MaMMUT (MaMMUT paper uses 1.0)."
+    )
+    parser.add_argument(
+        "--coca-contrastive-loss-weight",
+        type=float,
+        default=1.0,
+        help="Weight assigned to contrastive loss when training CoCa / MaMMUT."
+    )
+    parser.add_argument(
+        "--fused-caption-loss",
+        default=False,
+        action="store_true",
+        help="CoCa / MaMMUT: compute the caption loss inside the model via chunked fused "
+             "linear cross-entropy (never materializes the [B, L, vocab] logits; large memory "
+             "saving at big batch). Loss values match the default (logits) path exactly. "
+             "Not yet supported with --accum-freq > 1."
+    )
+    parser.add_argument(
+        "--caption-z-loss-weight",
+        type=float,
+        default=0.0,
+        help="Weight for mean square(logsumexp(vocabulary logits)) on valid next-token targets. "
+             "Applies to CoCa/MaMMUT and GenLIP/GenLAP at exactly this weight (independent of "
+             "--coca-caption-loss-weight); 0 disables it."
+    )
+    parser.add_argument(
+        "--caption-loss-compute-dtype",
+        choices=("float32", "model"),
+        default="float32",
+        help="Caption CE/logsumexp compute mode. float32 explicitly upcasts their logits (the default, "
+             "matching existing numerics); model preserves the logits dtype and ambient autocast policy. "
+             "Returned loss/component scalars remain float32."
+    )
+    parser.add_argument(
+        "--caption-loss-chunk-size",
+        type=int,
+        default=4096,
+        help="Number of valid next-token rows per vocabulary-logit chunk in fused caption loss."
+    )
+    parser.add_argument(
+        "--remote-sync",
+        type=str,
+        default=None,
+        help="Optinoally sync with a remote path specified by this arg",
+    )
+    parser.add_argument(
+        "--remote-sync-frequency",
+        type=int,
+        default=300,
+        help="How frequently to sync to a remote directly if --remote-sync is not None.",
+    )
+    parser.add_argument(
+        "--remote-sync-protocol",
+        choices=["s3", "fsspec"],
+        default="s3",
+        help="How to do the remote sync backup if --remote-sync is not None.",
+    )
+    parser.add_argument(
+        "--delete-previous-checkpoint",
+        default=False,
+        action="store_true",
+        help="If true, delete previous checkpoint after storing a new one."
+    )
+    parser.add_argument(
+        "--distill-model",
+        default=None,
+        help='Which model arch to distill from, if any.'
+    )
+    parser.add_argument(
+        "--distill-pretrained",
+        default=None,
+        help='Which pre-trained weights to distill from, if any.'
+    )
+    parser.add_argument(
+        "--use-bnb-linear",
+        default=None,
+        help='Replace the network linear layers from the bitsandbytes library. '
+        'Allows int8 training/inference, etc.'
+    )
+    parser.add_argument(
+        "--siglip",
+        default=False,
+        action="store_true",
+        help='Use SigLip (sigmoid) loss.'
+    )
+    parser.add_argument(
+        "--siglip-chunk-size",
+        default=0,
+        type=int,
+        help='Image rows per SigLIP logits chunk. 0 disables chunking (default).'
+    )
+    parser.add_argument(
+        "--loss-dist-impl",
+        default="gather",
+        type=str,
+        choices=("gather", "reduce", "bidir", "shift"),
+        help='SigLIP distributed loss implementation (default: gather).'
+    )
+    parser.add_argument(
+        "--use-naflex",
+        default=False,
+        action="store_true",
+        help="Use NaFlex WebDataset batching for training and NaFlex patchified validation / zero-shot loaders."
+    )
+    parser.add_argument(
+        "--force-naflex-vision",
+        default=False,
+        action="store_true",
+        help=(
+            "Convert compatible timm EVA/ViT vision towers to NaFlexViT without enabling the NaFlex data pipeline. "
+            "--use-naflex implies this."
+        ),
+    )
+    parser.add_argument(
+        "--naflex-num-train-image-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Number of image tokens per training epoch for NaFlex schedule creation. "
+            "Use this instead of --train-num-samples to target a token budget."
+        ),
+    )
+    parser.add_argument(
+        "--naflex-patch-sizes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Patch sizes to sample for NaFlex training. Eval uses the first value. Defaults to 16 when omitted."
+    )
+    parser.add_argument(
+        "--naflex-patch-size-probs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Sampling probabilities for --naflex-patch-sizes."
+    )
+    parser.add_argument(
+        "--force-naflex-patch-interp",
+        default=False,
+        action="store_true",
+        help="Force vision_cfg.naflex_patch_interp=True: enable timm's parameter-free patch-embed weight "
+             "interpolator on the NaFlex vision tower so --naflex-patch-sizes may include sizes other than the "
+             "model's base patch size. Auto-enabled when more than one patch size is listed. A model trained with "
+             "variable patch sizes should declare naflex_patch_interp in its config so inference needs no flag."
+    )
+    parser.add_argument(
+        "--naflex-seq-lens",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Sequence lengths to sample for NaFlex training. Eval pads/crops to the largest value."
+    )
+    parser.add_argument(
+        "--naflex-seq-len-probs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Per-batch sampling weights for --naflex-seq-lens (same length/order; normalized). Uniform if "
+             "unset. NOTE: weights are per BATCH; since B scales as budget/seq_len, a smaller seq-len holds more "
+             "rows, so the per-SAMPLE skew toward short seq-lens is stronger than the weights suggest."
+    )
+    parser.add_argument(
+        "--naflex-max-tokens-per-batch",
+        type=int,
+        default=None,
+        help="Maximum tokens per local NaFlex batch. When unset, inferred as --batch-size times the largest "
+             "--naflex-seq-lens row cost; GenLIP/GenLAP row cost also includes the caption-token cap. "
+             "An explicit value overrides this inference."
+    )
+    parser.add_argument(
+        "--naflex-max-text-tokens",
+        type=int,
+        default=None,
+        help="GenLIP caption token cap: truncates captions to this length AND is added to the per-row token "
+             "cost for batch sizing. Defaults to the model's text_cfg.context_length when unset."
+    )
+    parser.add_argument(
+        "--naflex-batch-divisor",
+        type=int,
+        default=8,
+        help="Divisibility constraint for scheduled NaFlex batch sizes."
+    )
+    parser.add_argument(
+        "--naflex-loss-scale",
+        type=str,
+        choices=("none", "linear", "sqrt"),
+        default="none",
+        help=(
+            "Scale NaFlex training loss by actual local batch size relative to --batch-size. "
+            "Defaults to no scaling."
+        ),
+    )
+    parser.add_argument(
+        "--length-bucketing",
+        action="store_true",
+        help="Train: reorder by sequence length to reduce per-batch padding. Standard CLIP / NaFlexClap key on "
+             "caption (variable text); NaFlexClap on audio; GenLAP on audio+caption; GenLIP on caption. "
+             "Reorder-only; train-only."
+    )
+    parser.add_argument(
+        "--bucket-pool",
+        type=int,
+        default=2048,
+        help="Per-worker sample pool size to sort for --length-bucketing (bucketing breadth vs randomness). "
+             "The pool buffers complete, undecoded samples (raw image/audio bytes), so per-worker memory "
+             "scales with pool x average raw sample size."
+    )
+    parser.add_argument(
+        "--bucket-chunk",
+        type=int,
+        default=128,
+        help="Run length within a sorted pool for --length-bucketing (~ a typical batch size)."
+    )
+    parser.add_argument(
+        "--bucket-prefetch-pools",
+        type=int,
+        default=0,
+        help="Experimental: run --length-bucketing's pool fill (disk read + tokenize) on a background thread, "
+             "buffering this many flushed pools ahead so it overlaps the batcher's decode instead of alternating "
+             "(smooths the disk/CPU/GPU seesaw). Buffers raw bytes -> ~pool x this many extra samples in memory. "
+             "0 (default) keeps the synchronous behavior."
+    )
+    parser.add_argument(
+        "--naflex-pad-multiple",
+        type=int,
+        default=None,
+        help="NaFlex audio only: pad to batch max, optionally rounded to multiples of M and clamped at the "
+             "per-batch cap. None = exact batch-max. Use M (for example 32 or 64) to limit compile shapes."
+    )
+    parser.add_argument(
+        "--text-pad-multiple",
+        type=int,
+        default=None,
+        help="Variable-length text only: round per-batch caption length up to multiples of M. None = exact "
+             "batch-max. Use M (for example 16 or 32) to bound the number of distinct text sequence lengths and "
+             "limit torch.compile recompiles (the token-axis analogue of --naflex-pad-multiple)."
+    )
+
+    args = parser.parse_args(args)
+
+    # Guard here (not just in NaFlexBatchScheduler) so the collate-only variable-text paths that bypass the
+    # scheduler (standard CLAP / synthetic / plain CLIP) also reject non-positive values.
+    if args.text_pad_multiple is not None and args.text_pad_multiple <= 0:
+        raise ValueError(f"--text-pad-multiple must be > 0 when set, got {args.text_pad_multiple}.")
+
+    # A negative EMA horizon would make the decay exp(-n/h) > 1 and diverge the EMA; 0 disables it.
+    if args.train_loss_ema_samples < 0:
+        raise ValueError(f"--train-loss-ema-samples must be >= 0 (0 disables), got {args.train_loss_ema_samples}.")
+
+    if args.caption_z_loss_weight < 0:
+        raise ValueError(
+            f"--caption-z-loss-weight must be >= 0 (0 disables), got {args.caption_z_loss_weight}.")
+    if args.caption_loss_chunk_size <= 0:
+        raise ValueError(f"--caption-loss-chunk-size must be > 0, got {args.caption_loss_chunk_size}.")
+    if args.siglip_chunk_size < 0:
+        raise ValueError(f"--siglip-chunk-size must be >= 0 (0 disables), got {args.siglip_chunk_size}.")
+
+    # Model-family effects (NaFlex data implied by GenLIP / GenLAP / NaFlexCLAP, grad-accum guards, the text-mask
+    # default) are applied after model creation by apply_model_traits(): the built model's traits decide, not
+    # the model name. --use-naflex here is pure user intent: NaFlex data pipeline plus conversion of the
+    # vision tower where the factory finds one it can convert (a no-op for NaFlex-native / audio models).
+    if args.use_naflex:
+        args.force_naflex_vision = True
+        _enable_naflex_aug_cfg(args)
+        # Listing several patch sizes only makes sense with weight interpolation; a single non-base size without
+        # the flag is caught by the NaFlex data config's fail-fast, which names --force-naflex-patch-interp.
+        if args.naflex_patch_sizes and len(set(args.naflex_patch_sizes)) > 1:
+            args.force_naflex_patch_interp = True
+
+    if 'timm' not in args.opt:
+        # set default opt params based on model name (only if timm optimizer not used)
+        default_params = get_default_params(args.model)
+        for name, val in default_params.items():
+            if getattr(args, name) is None:
+                setattr(args, name, val)
+
+    return args
+
+
+def _enable_naflex_aug_cfg(args):
+    args.aug_cfg = dict(args.aug_cfg or {})
+    args.aug_cfg["use_timm"] = True
+    args.aug_cfg["naflex"] = True
+
+
+def apply_model_traits(args, traits):
+    """Combine the built model's traits with the user's flags into the run-level settings the pipeline reads.
+
+    Call once, right after model creation (``open_clip.get_model_traits(model)``). Traits describe the model;
+    this is where they meet ``--use-naflex``, ``--accum-freq``, distillation settings, the ``args.variable_text``
+    override and ``--text-attention-mask``. Sets, in place:
+
+    - ``use_naflex``: implied for models that cannot consume fixed batches (GenLIP, GenLAP, NaFlexCLAP), with
+      the timm NaFlex aug_cfg toggles for consistency of the logged args (the factory already built matching
+      transforms from the same traits).
+    - ``variable_text``: user flag OR the text tower's contract.
+    - ``text_attention_mask``: defaults to whether the model consumes the standard collator's ``text_valid``
+      key (CoCa / MaMMUT, not under distillation); an explicit True elsewhere fails fast.
+
+    Raises for ``--use-naflex`` on a model with no NaFlex-capable tower, for ``--accum-freq > 1`` on models
+    without a contrastive feature cache, and for distillation of generative or CLAP models.
+    """
+    from open_clip.model_traits import InputMode, validate_distillation
+
+    distill = bool(getattr(args, "distill", False))
+    if traits.requires_naflex_data and not args.use_naflex:
+        args.use_naflex = True
+        _enable_naflex_aug_cfg(args)
+    naflex_capable = traits.image_input is InputMode.NAFLEX or traits.audio_input is InputMode.NAFLEX
+    if args.use_naflex and not naflex_capable:
+        # image towers are converted by the factory under --use-naflex (or it raised); a fixed audio tower
+        # (HTSAT / Whisper CLAP) or a non-NaFlex image tower cannot consume NaFlex batches at all
+        raise ValueError(
+            f"--use-naflex requires a NaFlex-capable tower, but this {traits.family.value} model has "
+            f"image_input={traits.image_input.value}, audio_input={traits.audio_input.value}."
+        )
+    args.variable_text = bool(getattr(args, "variable_text", False) or traits.variable_text)
+
+    if getattr(args, "accum_freq", 1) > 1 and not traits.supports_cached_grad_accum:
+        raise ValueError(
+            f"{traits.family.value} does not support --accum-freq > 1 (no contrastive feature caching)."
+        )
+    if distill:
+        validate_distillation(traits)
+
+    mask_consumer = traits.wants_text_valid_key and not distill
+    if getattr(args, "text_attention_mask", None) is None:
+        args.text_attention_mask = mask_consumer
+    elif args.text_attention_mask and not mask_consumer:
+        # fail fast: other tasks don't accept the batch key -- e.g. CLIPTask silently drops it in
+        # training_forward but the grad-accumulation path would crash on the unexpected key
+        raise ValueError(
+            "--text-attention-mask requires a task that consumes text validity masks "
+            "(CoCa / MaMMUT, without --distill); GenLIP/GenLAP and variable-text pipelines derive "
+            "validity in their collators, and CLIP-style contrastive tasks do not use one."
+        )
+    return args

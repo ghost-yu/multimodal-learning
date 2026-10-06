@@ -1,0 +1,285 @@
+""" MaMMUT model (https://arxiv.org/abs/2303.16839)
+
+A single vision encoder paired with a single text decoder that is used in two passes:
+a bi-directional pass without cross-attention for contrastive learning, and a causally
+masked pass with cross-attention over image tokens for caption generation.
+
+Ported from the LAION fork (https://github.com/LAION-AI/open_clip_mammut) with fixes:
+masked mean text pooling (pads excluded from pooling and attention), a properly scaled
+init for the image->decoder projection, a distinct lm_head vs contrastive projection,
+and no wasted vocab-head matmul in the contrastive pass. The original behaviour remains
+reachable via config flags (pool_type='avg_all', use_pad_mask=False) for compatibility
+with released openMaMMUT weights.
+"""
+from typing import Optional
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+import numpy as np
+
+from .model_traits import MAMMUT_TRAITS
+from .coca_model import MultimodalCfg, MultimodalGenerationMixin
+from .loss import fused_caption_loss
+from .model import CLIPVisionCfg, _build_vision_tower
+from .transformer import (
+    LayerNormFp32,
+    LayerNorm,
+    QuickGELU,
+    ModernMultimodalDecoder,
+    MultimodalDecoder,
+)
+
+
+def _build_multimodal_decoder_tower(
+        embed_dim: int,
+        multimodal_cfg: MultimodalCfg,
+        quick_gelu: bool = False,
+        cast_dtype: Optional[torch.dtype] = None,
+):
+    multimodal_cfg = MultimodalCfg(**multimodal_cfg) if isinstance(multimodal_cfg, dict) else multimodal_cfg
+    if multimodal_cfg.proj_type == 'none' and embed_dim != multimodal_cfg.width:
+        raise ValueError(
+            f"MaMMUT with proj_type='none' requires embed_dim == decoder width, "
+            f"got embed_dim={embed_dim}, width={multimodal_cfg.width}. "
+            f"Set multimodal_cfg.proj_type='linear' to decouple them."
+        )
+
+    if multimodal_cfg.text_arch == 'modern':
+        # modern decoder is cfg-driven and ignores quick_gelu / cast_dtype norm selection
+        # (act/norm come from mlp_type / norm_type, matching ModernTextTransformer)
+        decoder = ModernMultimodalDecoder(multimodal_cfg, output_dim=embed_dim)
+        decoder.variable_text = bool(multimodal_cfg.variable_text)
+        return decoder
+
+    act_layer = QuickGELU if quick_gelu else nn.GELU
+    norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
+
+    decoder = MultimodalDecoder(
+        context_length=multimodal_cfg.context_length,
+        vocab_size=multimodal_cfg.vocab_size,
+        width=multimodal_cfg.width,
+        heads=multimodal_cfg.heads,
+        layers=multimodal_cfg.layers,
+        mlp_ratio=multimodal_cfg.mlp_ratio,
+        ls_init_value=multimodal_cfg.ls_init_value,
+        cross_attn_ratio=multimodal_cfg.cross_attn_ratio,
+        output_dim=embed_dim,
+        proj_type=multimodal_cfg.proj_type,
+        pool_type=multimodal_cfg.pool_type,
+        use_pad_mask=multimodal_cfg.use_pad_mask,
+        pad_id=multimodal_cfg.pad_id,
+        bos_id=multimodal_cfg.bos_id,
+        eos_id=multimodal_cfg.eos_id,
+        act_layer=act_layer,
+        norm_layer=norm_layer,
+    )
+    # per-batch padded text contract, read by the data pipeline via model traits (see _build_text_tower)
+    decoder.variable_text = bool(multimodal_cfg.variable_text)
+
+    return decoder
+
+
+class MaMMUT(MultimodalGenerationMixin, nn.Module):
+    traits = MAMMUT_TRAITS
+
+    def __init__(
+            self,
+            embed_dim: int,
+            multimodal_cfg: MultimodalCfg,
+            vision_cfg: CLIPVisionCfg,
+            quick_gelu: bool = False,
+            init_logit_scale: float = np.log(1 / 0.07),
+            init_logit_bias: Optional[float] = None,
+            nonscalar_logit_scale: bool = False,
+            cast_dtype: Optional[torch.dtype] = None,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        multimodal_cfg = MultimodalCfg(**multimodal_cfg) if isinstance(multimodal_cfg, dict) else multimodal_cfg
+        vision_cfg = CLIPVisionCfg(**vision_cfg) if isinstance(vision_cfg, dict) else vision_cfg
+
+        self.visual = _build_vision_tower(
+            embed_dim=embed_dim,
+            vision_cfg=vision_cfg,
+            quick_gelu=quick_gelu,
+            cast_dtype=cast_dtype,
+        )
+        if not getattr(self.visual, 'output_tokens', False):
+            raise ValueError("MaMMUT requires vision_cfg.output_tokens=True for caption cross-attention.")
+
+        self.text = _build_multimodal_decoder_tower(
+            embed_dim=embed_dim,
+            multimodal_cfg=multimodal_cfg,
+            quick_gelu=quick_gelu,
+            cast_dtype=cast_dtype,
+        )
+
+        # projects image tokens to decoder width for cross-attention k/v. Token width comes
+        # from the trunk when the tower is timm-based (vision_cfg.width is unreliable there),
+        # else from the config.
+        vision_width = getattr(getattr(self.visual, 'trunk', None), 'num_features', None) or vision_cfg.width
+        self.map_viz2txt_kv = nn.Parameter(torch.empty(vision_width, multimodal_cfg.width))
+        nn.init.normal_(self.map_viz2txt_kv, std=vision_width ** -0.5)
+
+        lshape = [1] if nonscalar_logit_scale else []
+        self.logit_scale = nn.Parameter(torch.ones(lshape) * init_logit_scale)
+        if init_logit_bias is not None:
+            self.logit_bias = nn.Parameter(torch.ones(lshape) * init_logit_bias)
+        else:
+            self.logit_bias = None
+        # pad id is derived from the text tower (which gets it from multimodal_cfg.pad_id) so
+        # masking/pooling, generation defaults, and the caption loss ignore_index (via create_task)
+        # all share one source -- same pattern as CoCa / GenLIP
+        self.pad_id = self.text.pad_id
+        self.bos_id = getattr(self.text, 'bos_id', None)
+        self.eos_id = getattr(self.text, 'eos_id', None)
+
+        self.context_length = multimodal_cfg.context_length
+
+        # Runtime knob (--torchcompile-pass-break): under full-graph compile, split the graph
+        # between the two traversals of the shared decoder (contrastive pass, caption pass).
+        # One graph holding both checkpointed traversals makes the compiled backward retain a
+        # multi-block recompute working set (2-3.5x eager peak memory, torch 2.9-2.13); the
+        # break restores eager-like memory at no measured speed cost. Plain attribute rather
+        # than cfg: it is a compile-time training concern, not part of the model definition.
+        self.pass_graph_break = False
+
+    def set_grad_checkpointing(self, enable: bool = True, impl: str = 'inline'):
+        self.visual.set_grad_checkpointing(enable, impl=impl)
+        self.text.set_grad_checkpointing(enable, impl=impl)
+
+    def no_weight_decay(self):
+        # for timm optimizers, 1d params like logit_scale, logit_bias, ln/bn scale, biases are excluded by default
+        no_wd = set()
+        if hasattr(self.visual, 'no_weight_decay'):
+            for n in self.visual.no_weight_decay():
+                no_wd.add('visual.' + n)
+        for n in self.text.no_weight_decay():
+            no_wd.add('text.' + n)
+        return no_wd
+
+    def _encode_image(self, images, normalize: bool = True):
+        # native towers (output_tokens) return the (pooled, tokens) tuple; timm token-mode
+        # towers return {'pooled', 'patch_tokens', 'patch_valid'} -- normalize to a 3-tuple
+        # with None validity for native
+        out = self.visual(images)
+        if isinstance(out, dict):
+            required = {'pooled', 'patch_tokens', 'patch_valid'}
+            missing = required.difference(out)
+            if missing:
+                raise KeyError(f"MaMMUT vision output is missing required keys: {sorted(missing)}")
+            image_latent, image_embs, image_embs_valid = out['pooled'], out['patch_tokens'], out['patch_valid']
+        elif isinstance(out, (tuple, list)) and len(out) == 2:
+            image_latent, image_embs = out
+            image_embs_valid = None
+        else:
+            raise TypeError(
+                "MaMMUT vision tower must return (pooled, tokens) or a timm token-output dictionary."
+            )
+        image_latent = F.normalize(image_latent, dim=-1) if normalize else image_latent
+        return image_latent, image_embs, image_embs_valid
+
+    def _encode_text(self, text, text_valid=None, normalize: bool = True):
+        # the multimodal decoder boundary uses modality names: text_valid for its intrinsic text
+        # sequence (alongside context/context_valid for the generic cross-attention side)
+        text_latent = self.text(text, text_valid=text_valid, mode='contrastive')
+        text_latent = F.normalize(text_latent, dim=-1) if normalize else text_latent
+        return text_latent
+
+    def encode_image(self, images, normalize: bool = True):
+        image_latent, _, _ = self._encode_image(images, normalize=normalize)
+        return image_latent
+
+    def encode_text(self, text, text_valid=None, normalize: bool = True):
+        return self._encode_text(text, text_valid=text_valid, normalize=normalize)
+
+    def _generation_image_context(self, images):
+        """Image context for generation: (projected K/V, patch validity or None) from one encode."""
+        _, image_embs, image_embs_valid = self._encode_image(images)
+        return image_embs @ self.map_viz2txt_kv, image_embs_valid
+
+    def forward(
+            self,
+            image: Optional[torch.Tensor] = None,
+            text: Optional[torch.Tensor] = None,
+            text_valid: Optional[torch.Tensor] = None,
+            image_latent: Optional[torch.Tensor] = None,
+            image_embs: Optional[torch.Tensor] = None,
+            image_embs_valid: Optional[torch.Tensor] = None,
+            labels: Optional[torch.Tensor] = None,
+            caption_z_loss: bool = False,
+            caption_loss_compute_dtype=torch.float32,
+            caption_loss_chunk_size: int = 4096,
+    ):
+        """text_valid: optional [B, L] bool/int text validity (True/1 = real token), consumed by the
+        contrastive pass (attention + pooling, passed straight through to the decoder's
+        ``text_valid``); validity falls back to ``text != pad_id`` when absent, and legacy
+        configs ignore it (see MultimodalDecoder). The caption pass is causal over right-padded
+        text; label masking happens task-side.
+
+        image_embs_valid: optional [B, N_img] bool/int validity for ``image_embs`` (True/1 = real
+        patch token). Produced by NaFlex token-mode towers (padded patch batches) and threaded to
+        the caption pass as the decoder's ``context_valid``; supply it alongside precomputed
+        ``image_embs`` or padded K/V silently join cross-attention. None = dense tokens.
+
+        labels: optional [B, L-1] AR-shifted caption labels (-100 = ignore, task-built). When
+        given, the caption pass returns the reduced caption CE as ``caption_loss_ce`` (plus
+        ``caption_loss_z`` when ``caption_z_loss`` is set) computed via the fused linear
+        cross-entropy (full-vocab logits are never materialized) instead of ``logits``. Loss
+        weighting is applied downstream (CoCaLoss)."""
+        if image is not None and (image_latent is None or image_embs is None):
+            image_latent, image_embs, image_embs_valid = self._encode_image(image)
+
+        if text is None:
+            return {
+                "image_features": image_latent,
+                "image_embs": image_embs,
+                "image_embs_valid": image_embs_valid,
+            }
+
+        text_latent = self._encode_text(text, text_valid=text_valid)
+
+        if image_latent is None:
+            return {"text_features": text_latent}
+
+        if self.pass_graph_break:
+            # see ctor note: keep the contrastive and caption decoder traversals in separate
+            # compiled graphs; a no-op in eager and under the 'blocks' compile strategy
+            torch._dynamo.graph_break()
+
+        # caption pass: causal self-attention w/ cross-attention over projected image tokens
+        image_kv = image_embs @ self.map_viz2txt_kv
+
+        out_dict = {
+            "image_features": image_latent,
+            "text_features": text_latent,
+            "logit_scale": self.logit_scale.exp(),
+        }
+        if labels is not None:
+            hidden = self.text(
+                text, context=image_kv, context_valid=image_embs_valid,
+                mode='caption', return_hidden=True)
+            caption_losses = fused_caption_loss(
+                hidden, labels, *self.text.lm_head_params,
+                chunk_size=caption_loss_chunk_size,
+                z_loss=caption_z_loss,
+                compute_dtype=caption_loss_compute_dtype,
+            )
+            out_dict.update(caption_losses)
+        else:
+            out_dict["logits"] = self.text(
+                text, context=image_kv, context_valid=image_embs_valid, mode='caption')
+        if self.logit_bias is not None:
+            out_dict["logit_bias"] = self.logit_bias
+        return out_dict
+
+    def _generation_components(self):
+        return dict(
+            image_embs_fn=self._generation_image_context,
+            # The decoder embeds token ids internally.
+            text_encoder_fn=lambda ids: ids,
+            text_decoder_fn=lambda img_kv, ids, valid=None: self.text(
+                ids, context=img_kv, context_valid=valid, mode='caption'),
+            decoder=self.text,
+        )

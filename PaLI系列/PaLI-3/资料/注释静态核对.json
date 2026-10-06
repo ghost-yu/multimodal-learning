@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "big_vision/models/proj/image_text/two_towers.py",
+      "comments_added": 74,
+      "ast_equal_before": true,
+      "ast_equal_HEAD": true,
+      "runtime_verified": false
+    },
+    {
+      "file": "big_vision/trainers/proj/image_text/siglip.py",
+      "comments_added": 24,
+      "ast_equal_before": true,
+      "ast_equal_HEAD": true,
+      "runtime_verified": false
+    }
+  ]
+}

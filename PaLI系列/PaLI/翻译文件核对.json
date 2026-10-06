@@ -1,0 +1,19 @@
+{
+  "paper": "PaLI",
+  "original_pages": 33,
+  "full_quality_review": false,
+  "outputs": [
+    {
+      "file": "中文论文.pdf",
+      "pages": 33,
+      "all_pages_text_readable": true,
+      "first_page_chinese_chars": 691
+    },
+    {
+      "file": "双语论文.pdf",
+      "pages": 66,
+      "all_pages_text_readable": true,
+      "first_page_chinese_chars": 0
+    }
+  ]
+}

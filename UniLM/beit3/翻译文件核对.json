@@ -1,0 +1,14 @@
+[
+  {
+    "file": "中文论文.pdf",
+    "pages": 18,
+    "all_pages_open_and_text_read": true,
+    "full_translation_review": false
+  },
+  {
+    "file": "双语论文.pdf",
+    "pages": 36,
+    "all_pages_open_and_text_read": true,
+    "full_translation_review": false
+  }
+]

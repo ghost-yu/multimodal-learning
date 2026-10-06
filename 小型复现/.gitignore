@@ -1,0 +1,4 @@
+__pycache__/
+real_data/
+checkpoints/
+pretrained/

@@ -1,0 +1,1161 @@
+import io
+import logging
+import math
+import os
+import queue
+import random
+import threading
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+import torch
+from torch.utils.data import Dataset, IterableDataset
+from torch.utils.data.dataloader import default_collate
+
+from open_clip.naflex_config import NaFlexDataConfig, PatchSize, to_2tuple
+
+try:
+    from timm.data.naflex_dataset import NaFlexCollator, calculate_naflex_batch_size
+    from timm.data.naflex_transforms import Patchify
+
+    NAFLEX_AVAILABLE = True
+except ImportError:
+    NaFlexCollator = None
+    calculate_naflex_batch_size = None
+    Patchify = None
+    NAFLEX_AVAILABLE = False
+
+
+Sample = Dict[str, Any]
+
+
+__all__ = [
+    "NAFLEX_AVAILABLE",
+    "AudioTokenLength",
+    "CaptionLength",
+    "LengthBucketer",
+    "NaFlexBatchScheduler",
+    "NaFlexBatcher",
+    "NaFlexMapDatasetWrapper",
+    "SampleDecodeError",
+    "collate_naflex_dicts",
+    "collate_naflex_tuples",
+    "create_naflex_data_config_from_args",
+    "create_naflex_eval_transform",
+    "get_naflex_model_image_seq_len",
+    "get_naflex_model_patch_size",
+    "get_naflex_model_supports_patch_interpolation",
+    "prewarm_naflex_patch_interpolator",
+    "require_naflex",
+    "resolve_patch_cfg",
+]
+
+
+# Consecutive (not total) decode failures the streaming batcher tolerates before giving up -- a sparse dirty
+# shard resets the counter on the next good sample, but a fully-corrupt stream / systematic decode bug raises
+# a diagnosable error instead of spinning forever against the infinite source. Mirrors OPEN_CLIP_WDS_ERROR_LOG_EVERY.
+_MAX_CONSECUTIVE_DECODE_FAILURES = int(os.environ.get("OPEN_CLIP_MAX_CONSECUTIVE_DECODE_FAILURES", "1000"))
+
+
+class SampleDecodeError(Exception):
+    """Raised by ``NaFlexBatchScheduler.process_sample`` when ``decode_fn`` fails on a sample's raw bytes.
+
+    The streaming batcher catches this to skip + replenish the bad sample (keeping batches exactly
+    ``batch_size``). Transform/patchify errors are intentionally NOT wrapped -- a failure there is a bug, not bad
+    data, so it propagates loudly (mirrors the old decode-only ``handler=log_and_continue`` stage).
+    """
+
+
+def _advance_epoch(owner) -> int:
+    if hasattr(owner.epoch, "get_value"):
+        return int(owner.epoch.get_value())
+    owner.epoch += 1
+    return int(owner.epoch)
+
+
+def require_naflex() -> None:
+    if not NAFLEX_AVAILABLE:
+        raise RuntimeError(
+            "NaFlex requires a timm version with NaFlex data support, including eval patchify transforms. "
+            "Install timm>=1.0.16 or a recent timm main checkout."
+        )
+
+
+def resolve_patch_cfg(
+        patch_size: Optional[PatchSize] = None,
+        patch_size_choices: Optional[Sequence[PatchSize]] = None,
+        patch_size_choice_probs: Optional[Sequence[float]] = None,
+) -> Tuple[List[Tuple[int, int]], List[float], bool]:
+    # Mirrors timm.data.naflex_dataset._resolve_patch_cfg without importing a private helper.
+    if patch_size is None and patch_size_choices is None:
+        patch_size = 16
+    if (patch_size is None) == (patch_size_choices is None):
+        raise ValueError("Specify exactly one of `patch_size` or `patch_size_choices`.")
+
+    if patch_size is not None:
+        return [to_2tuple(patch_size)], [1.0], False
+
+    sizes = [to_2tuple(size) for size in patch_size_choices]
+    if not sizes:
+        raise ValueError("`patch_size_choices` must contain at least one value.")
+    if patch_size_choice_probs is None:
+        probs = [1.0 / len(sizes)] * len(sizes)
+    else:
+        if len(patch_size_choice_probs) != len(sizes):
+            raise ValueError("`patch_size_choice_probs` must match `patch_size_choices` length.")
+        prob_sum = float(sum(patch_size_choice_probs))
+        if prob_sum <= 0:
+            raise ValueError("`patch_size_choice_probs` must sum to a positive value.")
+        probs = [float(prob) / prob_sum for prob in patch_size_choice_probs]
+    return sizes, probs, True
+
+
+def get_naflex_model_patch_size(model) -> Optional[Tuple[int, int]]:
+    model = getattr(model, 'module', model)
+    visual = getattr(model, 'visual', None)
+    trunk = getattr(visual, 'trunk', visual)
+    # TimmModel exposes geometry on ``visual.trunk``; custom adapters such as GenLIP expose it on ``visual``
+    # even though they also have an unrelated internal ``trunk`` attribute.
+    for tower in (trunk, visual):
+        if tower is not None and hasattr(tower, 'get_patch_size'):
+            return to_2tuple(tower.get_patch_size())
+    return None
+
+
+def get_naflex_model_supports_patch_interpolation(model) -> bool:
+    """Return whether the constructed image tower can currently consume non-base spatial patches.
+
+    This intentionally reports the resolved model state, not merely whether its class could support interpolation:
+    a timm NaFlexVit built without ``enable_patch_interpolator`` still fails on non-base patches.
+    """
+    model = getattr(model, 'module', model)
+    visual = getattr(model, 'visual', None)
+    trunk = getattr(visual, 'trunk', visual)
+    for tower in (trunk, visual):
+        if tower is None:
+            continue
+        declared = getattr(tower, 'supports_patch_interpolation', None)
+        if declared is not None:
+            return bool(declared)
+        embeds = getattr(tower, 'embeds', None)
+        if embeds is not None:
+            return bool(
+                getattr(embeds, 'is_linear', False)
+                and getattr(embeds, 'enable_patch_interpolator', False)
+                and getattr(embeds, 'patch_interpolator', None) is not None
+                and getattr(embeds, 'norm_input', None) is None
+            )
+    return False
+
+
+def prewarm_naflex_patch_interpolator(model, naflex_data_config) -> bool:
+    """Precompute the image tower's patch-embed resampling matrices for every configured non-base patch size.
+
+    Wraps timm's ``prewarm_patch_interpolator`` (timm >= 1.0.29). Returns False as a no-op on older timm, when no
+    non-base patch size is configured, or when the tower does not expose the hook. Call after the model is on its
+    execution device and cast to its training dtype, and before ``torch.compile``: without prewarming the first
+    non-base forward fills the cache lazily, which costs a recompile under compile. timm clears the cache on any
+    later ``.to()`` / dtype conversion, after which the lazy path simply resumes.
+    """
+    model_patch_size = getattr(naflex_data_config, 'model_patch_size', None)
+    if model_patch_size is None:
+        return False
+    patch_sizes = set(naflex_data_config.train_patch_sizes)
+    patch_sizes.add(naflex_data_config.eval_patch_size)
+    patch_sizes = sorted(size for size in patch_sizes if size != model_patch_size)
+    if not patch_sizes:
+        return False
+    model = getattr(model, 'module', model)
+    visual = getattr(model, 'visual', None)
+    trunk = getattr(visual, 'trunk', visual)
+    for tower in (trunk, visual):
+        prewarm = getattr(tower, 'prewarm_patch_interpolator', None)
+        if callable(prewarm):
+            prewarm(patch_sizes)
+            return True
+    return False
+
+
+def get_naflex_model_image_seq_len(model) -> Optional[int]:
+    model = getattr(model, 'module', model)
+    image_seq_len = getattr(getattr(model, 'visual', None), 'image_seq_len', None)
+    return int(image_seq_len) if image_seq_len is not None else None
+
+
+def create_naflex_data_config_from_args(
+        args,
+        default_patch_size: Optional[PatchSize] = None,
+        default_eval_seq_len: Optional[int] = None,
+        supports_patch_interpolation: Optional[bool] = None,
+) -> NaFlexDataConfig:
+    patch_sizes = getattr(args, 'naflex_patch_sizes', None)
+    if patch_sizes is None and default_patch_size is not None:
+        patch_sizes = [default_patch_size]
+    seq_lens = getattr(args, 'naflex_seq_lens', None)
+    return NaFlexDataConfig.resolve(
+        patch_sizes=patch_sizes,
+        patch_size_probs=getattr(args, 'naflex_patch_size_probs', None),
+        seq_lens=seq_lens,
+        seq_len_probs=getattr(args, 'naflex_seq_len_probs', None),
+        train_num_image_tokens=getattr(args, 'naflex_num_train_image_tokens', None),
+        max_tokens_per_batch=getattr(args, 'naflex_max_tokens_per_batch', None),
+        batch_divisor=getattr(args, 'naflex_batch_divisor', 8),
+        eval_seq_len=default_eval_seq_len if seq_lens is None else None,
+        model_patch_size=default_patch_size,
+        supports_patch_interpolation=supports_patch_interpolation,
+    )
+
+
+def create_naflex_eval_transform(
+        transform_factory,
+        naflex_data_config: NaFlexDataConfig,
+) -> Tuple[Callable, int, Tuple[int, int]]:
+    require_naflex()
+    if not getattr(transform_factory, 'is_naflex_eval_transform_factory', False):
+        raise ValueError("NaFlex eval requires `--aug-cfg use_timm=True naflex=True`.")
+
+    patch_size, max_seq_len = naflex_data_config.eval_config
+    flatten_patches = naflex_data_config.should_flatten_patches(patch_size)
+    if getattr(transform_factory, 'supports_patch_flatten_control', False):
+        transform = transform_factory(
+            max_seq_len=max_seq_len,
+            patch_size=patch_size,
+            flatten_patches=flatten_patches,
+        )
+    else:
+        if not flatten_patches:
+            raise ValueError(
+                "NaFlex eval at a non-base patch size requires an eval transform factory that can preserve "
+                "unflattened patches."
+            )
+        transform = transform_factory(max_seq_len=max_seq_len, patch_size=patch_size)
+    return transform, max_seq_len, patch_size
+
+
+def collate_naflex_tuples(
+        batch: List[Tuple[Dict[str, torch.Tensor], Any]],
+        max_seq_len: Optional[int] = None,
+) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    require_naflex()
+    return NaFlexCollator(max_seq_len=max_seq_len)(batch)
+
+
+def collate_variable_text(
+        targets: List[Any],
+        pad_id: int,
+        pad_multiple: Optional[int] = None,
+        pad_cap: Optional[int] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Pad a list of variable-length token id sequences into a batch.
+
+    Args:
+        targets: List of 1-D token id tensors (or sequences) of differing lengths.
+        pad_id: Padding token id used to fill, and to derive the validity mask.
+        pad_multiple: When set, round the batch sequence length up to this multiple. Bounds the number of distinct
+            ``Lmax`` values across batches so torch.compile recompiles a small fixed set of graphs (the text-axis
+            analogue of ``--naflex-pad-multiple`` for audio patches).
+        pad_cap: Upper bound for the rounded length (typically the tokenizer truncation cap / context_length), so
+            rounding never pads past what absolute-position towers can consume. Sequences longer than the cap
+            raise: the tokenizer is expected to have truncated already, and truncating here would silently chop
+            the tail (including the EOS that pooling depends on).
+
+    Returns:
+        Tuple ``(text, text_valid)`` of shape ``[B, Lmax]``; ``text_valid`` is ``text != pad_id``.
+    """
+    tensors = [t if torch.is_tensor(t) else torch.as_tensor(t, dtype=torch.long) for t in targets]
+    max_len = max((t.shape[0] for t in tensors), default=0)
+    if pad_cap and max_len > pad_cap:
+        raise ValueError(
+            f"variable-text sequence length ({max_len}) exceeds pad_cap ({pad_cap}); "
+            "the tokenizer is expected to truncate to the context length."
+        )
+    if pad_multiple:
+        max_len = math.ceil(max_len / pad_multiple) * pad_multiple
+        if pad_cap:
+            max_len = min(max_len, pad_cap)
+    text = torch.full((len(tensors), max_len), pad_id, dtype=torch.long)
+    for i, tokens in enumerate(tensors):
+        text[i, :tokens.shape[0]] = tokens
+    return text, text != pad_id
+
+
+def _collate_optional_values(values: Sequence[Any], key: str) -> Optional[Any]:
+    """Collate an optional per-sample sidecar, requiring all-or-none presence."""
+    present = [value is not None for value in values]
+    if not any(present):
+        return None
+    if not all(present):
+        raise ValueError(f"NaFlex batch has {key!r} for only some samples.")
+    return default_collate(values)
+
+
+def collate_naflex_dicts(
+        batch: List[Sample],
+        primary_key: str = "image",
+        target_key: str = "text",
+        max_seq_len: Optional[int] = None,
+        pad_id: Optional[int] = None,
+        text_pad_multiple: Optional[int] = None,
+        text_pad_cap: Optional[int] = None,
+) -> Dict[str, Any]:
+    if pad_id is not None:
+        # Variable-length captions padded within the batch. The `<target>_valid` mask is always emitted; tasks
+        # select the batch keys they consume, so contrastive towers simply ignore it.
+        primary_batch = NaFlexBatchScheduler._collate_patch_dicts(
+            [sample[primary_key] for sample in batch], max_seq_len,
+        )
+        text, text_valid = collate_variable_text(
+            [sample[target_key] for sample in batch], pad_id,
+            pad_multiple=text_pad_multiple, pad_cap=text_pad_cap,
+        )
+        return {
+            primary_key: primary_batch,
+            target_key: text,
+            f"{target_key}_valid": text_valid,
+        }
+
+    primary_batch, targets = collate_naflex_tuples(
+        [(sample[primary_key], sample[target_key]) for sample in batch],
+        max_seq_len=max_seq_len,
+    )
+    output = {
+        primary_key: primary_batch,
+        target_key: targets,
+    }
+    valid_key = f"{target_key}_valid"
+    target_valid = _collate_optional_values([sample.get(valid_key) for sample in batch], valid_key)
+    if target_valid is not None:
+        output[valid_key] = target_valid
+    return output
+
+
+def _padded_per_rank(total: int, distributed: bool, world_size: int) -> int:
+    if total <= 0:
+        raise ValueError("NaFlex schedule size must be positive.")
+    if distributed and world_size > 1:
+        return math.ceil(total / world_size)
+    return total
+
+
+class CaptionLength:
+    """Length-fn: caption (text) token count of a sample. Picklable (forkserver-safe DataLoader workers)."""
+
+    def __init__(self, key: str = "text"):
+        self.key = key
+
+    def __call__(self, sample: Sample) -> int:
+        if (value := sample.get(self.key)) is None:
+            return 0
+        return value.shape[0] if hasattr(value, "shape") else len(value)
+
+
+class AudioTokenLength:
+    """Length-fn: estimated NaFlex audio-patch count ``k`` before patchify.
+
+    Mirrors ``AudioNaFlexPatchify``: resample-aware frame count, ceil to time patches, multiply by freq tokens,
+    and optionally clamp to the largest cap. Accepts either decoded ``(waveform, sr)`` samples or raw audio
+    bytes -- bucketed pipelines reorder *before* decode (so the bucket pool holds compressed bytes, not
+    waveforms), in which case frame count and sample rate are read from the container header without decoding.
+    """
+
+    def __init__(
+            self,
+            audio_key: str = "audio",
+            freq_tokens: int = 1,
+            patch_time: int = 1,
+            hop_size: int = 1,
+            window_size: int = 0,
+            sample_rate: int = 0,
+            max_audio_tokens: int = 0,
+    ):
+        self.audio_key = audio_key
+        self.freq_tokens = max(1, int(freq_tokens))
+        self.patch_time = max(1, int(patch_time))
+        self.hop_size = max(1, int(hop_size))
+        self.window_size = max(0, int(window_size))  # mel STFT floor: short clips padded up to one window
+        self.sample_rate = int(sample_rate)
+        self.max_audio_tokens = max(0, int(max_audio_tokens))  # cap (== max seq-len bucket); 0 = uncapped
+
+    def __call__(self, sample: Sample) -> int:
+        audio = sample.get(self.audio_key)
+        if isinstance(audio, (bytes, bytearray)):
+            # Raw (pre-decode) member: header-parse frames + rate. Containers without a frame count in the
+            # header (e.g. some VBR mp3 backends) fall through to 0 -- those samples just sort together,
+            # a sort-key quality degradation only, never a correctness issue.
+            try:
+                import torchaudio
+                info = torchaudio.info(io.BytesIO(audio))
+                num_samples, sr = int(info.num_frames), int(info.sample_rate)
+            except Exception:
+                return 0
+            if num_samples <= 0:
+                return 0
+        elif isinstance(audio, (tuple, list)) and audio and hasattr(audio[0], "shape"):
+            waveform, sr = audio[0], (audio[1] if len(audio) > 1 else 0)
+            num_samples = waveform.shape[-1]
+        else:
+            return 0
+        if self.sample_rate and sr and sr != self.sample_rate:
+            num_samples = num_samples * self.sample_rate / sr  # mel runs at sample_rate -> resampled frame count
+        num_samples = max(num_samples, self.window_size)  # mirror the transform's pad of sub-window clips
+        frames = int(num_samples // self.hop_size) + 1
+        time_tokens = max(1, math.ceil(frames / self.patch_time))  # match the transform's ceil-pad (not floor-crop)
+        tokens = self.freq_tokens * time_tokens
+        return min(tokens, self.max_audio_tokens) if self.max_audio_tokens else tokens
+
+
+def _prefetch(
+        make_pools: Callable[[threading.Event], Iterable[List[Sample]]],
+        maxsize: int,
+        poll: float = 1.0,
+) -> Iterable[Sample]:
+    """Run a pool producer on a background thread, buffering up to ``maxsize`` flushed pools ahead, then yield
+    samples on the calling thread.
+
+    ``make_pools`` is a factory ``stop -> Iterable[List[Sample]]`` (e.g. ``LengthBucketer._pools`` bound to the
+    source). It is handed the ``stop`` event so it can abandon a half-filled pool the moment the consumer closes,
+    rather than materializing the whole pool first. Overlaps the upstream disk read + tokenize + bucketing
+    (producer thread) with the downstream decode + patchify (consumer thread, the ``NaFlexBatcher``).
+    Order-preserving: pools and samples come out in producer order, and the producer is the only thread touching
+    the source / ``rng``, so no nondeterminism is added vs the synchronous path. The thread + queue are created at
+    iteration time (in the worker), so the owning ``LengthBucketer`` stays picklable.
+    """
+    pending: "queue.Queue" = queue.Queue(maxsize=maxsize)
+    stop = threading.Event()
+    done = object()
+    box: Dict[str, BaseException] = {}
+
+    def put_blocking(item) -> bool:
+        # Retry until the item is delivered, or until the consumer closed early (`stop`). A plain put-with-timeout
+        # that drops the item on `Full` would lose it -- and dropping the `done` sentinel hangs the consumer on its
+        # final `get()` at end-of-stream when a slow (decode-bound) consumer leaves the queue full.
+        while not stop.is_set():
+            try:
+                pending.put(item, timeout=poll)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def produce():
+        try:
+            for pool in make_pools(stop):
+                if not put_blocking(pool):
+                    break  # consumer closed early
+        except BaseException as exc:  # surface upstream (tar/tokenize) errors to the consumer thread
+            box["exc"] = exc
+        finally:
+            put_blocking(done)  # deliver the sentinel reliably; no-op if the consumer already closed (`stop` set)
+
+    thread = threading.Thread(target=produce, name="naflex-bucket-prefetch", daemon=True)
+    thread.start()
+    try:
+        while True:
+            pool = pending.get()
+            if pool is done:
+                break
+            yield from pool
+    finally:
+        # Consumer stopped early (epoch boundary / worker shutdown): signal the producer (so `make_pools` bails
+        # mid-fill and `put_blocking` stops retrying) and drain the queue so a parked `put` unblocks -- the daemon
+        # thread exits within `poll` instead of leaking across epochs under persistent_workers.
+        stop.set()
+        try:
+            while True:
+                pending.get_nowait()
+        except queue.Empty:
+            pass
+    if "exc" in box:
+        raise box["exc"]
+
+
+class LengthBucketer:
+    """WebDataset stage that reorders samples so similar sequence lengths batch together.
+
+    Sort key is ``sum(fn(sample) for fn in length_fns)``: NaFlexClap ``[audio]``, GenLAP ``[audio, caption]``,
+    GenLIP ``[caption]``. Reorder-only; every sample and step count is preserved.
+
+    Module-level and picklable (no closures) for forkserver-safe DataLoader workers, mirroring ``TokenizeText``.
+    """
+
+    def __init__(
+            self,
+            length_fns: Optional[Sequence[Callable[[Sample], int]]] = None,
+            pool: int = 2048,
+            chunk: int = 128,
+            seed: int = 42,
+            epoch=-1,
+            prefetch_pools: int = 0,
+    ):
+        self.length_fns = list(length_fns) if length_fns else [CaptionLength()]
+        self.pool = max(1, int(pool))
+        self.chunk = max(1, int(chunk))
+        self.seed = int(seed)
+        self.epoch = epoch
+        # 0 (default) -> synchronous fill-then-drain (unchanged). >0 -> run the upstream read/bucketing on a
+        # background thread, buffering this many flushed pools ahead so disk fill overlaps the decode drain.
+        self.prefetch_pools = max(0, int(prefetch_pools))
+
+    def _epoch(self) -> int:
+        if hasattr(self.epoch, "get_value"):
+            return int(self.epoch.get_value())
+        return int(self.epoch)
+
+    def _length(self, sample: Sample) -> int:
+        return sum(fn(sample) for fn in self.length_fns)
+
+    def _flush(self, buffer: List[Sample], rng: random.Random):
+        buffer.sort(key=self._length)
+        chunks = [buffer[i:i + self.chunk] for i in range(0, len(buffer), self.chunk)]
+        rng.shuffle(chunks)
+        for chunk in chunks:
+            yield from chunk
+
+    def _pools(self, src: Iterable[Sample], rng: random.Random, stop=None) -> Iterable[List[Sample]]:
+        """Flushed pools as materialized lists -- the prefetch producer drives this on a background thread.
+        Reuses ``_flush`` so the sort/chunk ordering is identical to the synchronous path. ``stop`` (the prefetch
+        event) is checked between samples so a half-filled pool is abandoned promptly when the consumer closes,
+        instead of reading/tokenizing a whole pool first."""
+        buffer: List[Sample] = []
+        for sample in src:
+            if stop is not None and stop.is_set():
+                return
+            buffer.append(sample)
+            if len(buffer) >= self.pool:
+                yield list(self._flush(buffer, rng))
+                buffer = []
+        if buffer:
+            yield list(self._flush(buffer, rng))
+
+    def __call__(self, src: Iterable[Sample]):
+        worker = torch.utils.data.get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        rng = random.Random(self.seed + self._epoch() * 131 + worker_id)
+        if self.prefetch_pools > 0:
+            yield from _prefetch(lambda stop: self._pools(src, rng, stop), maxsize=self.prefetch_pools)
+            return
+        buffer: List[Sample] = []
+        for sample in src:
+            buffer.append(sample)
+            if len(buffer) >= self.pool:
+                yield from self._flush(buffer, rng)
+                buffer = []
+        if buffer:
+            yield from self._flush(buffer, rng)
+
+
+class NaFlexBatchScheduler:
+    """Shared NaFlex schedule, patchify, and collation logic."""
+
+    def __init__(
+            self,
+            train_num_samples: Optional[int] = None,
+            train_num_tokens: Optional[int] = None,
+            patch_size: Optional[PatchSize] = None,
+            patch_size_choices: Optional[Sequence[PatchSize]] = None,
+            patch_size_choice_probs: Optional[Sequence[float]] = None,
+            seq_lens: Sequence[int] = (128, 256, 576, 784, 1024),
+            seq_len_choice_probs: Optional[Sequence[float]] = None,
+            max_tokens_per_batch: int = 4096 * 4,
+            transform_factory: Optional[Callable[..., Callable]] = None,
+            seed: int = 42,
+            shuffle: bool = True,
+            distributed: bool = False,
+            rank: int = 0,
+            world_size: int = 1,
+            batch_divisor: int = 8,
+            primary_key: str = "image",
+            target_key: str = "text",
+            pad_id: Optional[int] = None,
+            per_row_text_tokens: int = 0,
+            pad_multiple: Optional[int] = None,
+            text_pad_multiple: Optional[int] = None,
+            text_pad_cap: Optional[int] = None,
+            decode_fn: Optional[Callable] = None,
+            model_patch_size: Optional[PatchSize] = None,
+    ) -> None:
+        require_naflex()
+
+        if (train_num_samples is None) == (train_num_tokens is None):
+            raise ValueError("Specify exactly one of `train_num_samples` or `train_num_tokens` for NaFlex batching.")
+        if transform_factory is None:
+            raise ValueError("NaFlex batching requires a transform factory.")
+
+        # Sampling weights (optional) stay aligned to ``self.seq_lens``: pair with the seq-lens, then sort+dedupe
+        # by seq-len so the canonical sort can't desync them. ``None`` -> uniform sampling (legacy randint).
+        if seq_len_choice_probs is not None:
+            if len(seq_len_choice_probs) != len(seq_lens):
+                raise ValueError("`seq_len_choice_probs` must match `seq_lens` length.")
+            pairs = sorted({int(s): float(p) for s, p in zip(seq_lens, seq_len_choice_probs)}.items())
+            self.seq_lens = [s for s, _ in pairs]
+            total = float(sum(p for _, p in pairs))
+            if total <= 0:
+                raise ValueError("`seq_len_choice_probs` must sum to a positive value.")
+            self.seq_len_probs = [p / total for _, p in pairs]
+        else:
+            self.seq_lens = sorted(set(int(seq_len) for seq_len in seq_lens))
+            self.seq_len_probs = None
+        if not self.seq_lens:
+            raise ValueError("NaFlex batching requires at least one sequence length.")
+        if not all(seq_len > 0 for seq_len in self.seq_lens):
+            raise ValueError("NaFlex sequence lengths must be positive.")
+        self.max_tokens_per_batch = int(max_tokens_per_batch)
+        if self.max_tokens_per_batch <= 0:
+            raise ValueError("`max_tokens_per_batch` must be positive.")
+        self.transform_factory = transform_factory
+        # Optional per-modality decode (raw bytes -> PIL / (waveform, sr)) applied inside `process_sample` so the
+        # batcher accumulates small patch dicts, not `batch_size` decoded full-res samples. None -> samples are
+        # assumed already decoded (map-style / test callers).
+        self.decode_fn = decode_fn
+        self.seed = int(seed)
+        self.shuffle = bool(shuffle)
+        self.distributed = bool(distributed)
+        self.rank = int(rank) if distributed else 0
+        self.world_size = int(world_size) if distributed else 1
+        self.batch_divisor = int(batch_divisor)
+        if self.batch_divisor <= 0:
+            raise ValueError("`batch_divisor` must be positive.")
+        self.primary_key = primary_key
+        self.target_key = target_key
+        self.target_valid_key = f"{target_key}_valid"
+        self.pad_id = pad_id
+        # Per-row text token cost added when sizing batches so the token budget counts primary + text (the
+        # worst-case caption length, i.e. the tokenizer context-length cap). 0 = primary-only batch sizing
+        # (default; preserves CLIP/SigLIP behavior). GenLIP sets this to the caption cap so the budget bounds
+        # total (primary+text) tokens per batch. It does NOT change the primary bucket used for patchify/collation.
+        self.per_row_text_tokens = int(per_row_text_tokens or 0)
+
+        # Native audio pads to batch max, optionally modulus-rounded for a smaller compile shape set.
+        # Image paths keep pad-to-seq_len because their transforms resize to the sampled bucket.
+        if pad_multiple is not None and int(pad_multiple) <= 0:
+            raise ValueError(f"`pad_multiple` (--naflex-pad-multiple) must be > 0 when set, got {pad_multiple}.")
+        self.pad_multiple = int(pad_multiple) if pad_multiple else None
+        # Text-axis pad-multiple: round variable-length captions to a multiple to bound compile shapes (token
+        # axis, independent of the audio-patch `pad_multiple`); `text_pad_cap` (the tokenizer truncation cap)
+        # bounds the rounding so it never pads past what the text tower can consume.
+        if text_pad_multiple is not None and int(text_pad_multiple) <= 0:
+            raise ValueError(
+                f"`text_pad_multiple` (--text-pad-multiple) must be > 0 when set, got {text_pad_multiple}."
+            )
+        self.text_pad_multiple = int(text_pad_multiple) if text_pad_multiple else None
+        self.text_pad_cap = int(text_pad_cap) if text_pad_cap else None
+        self.pad_freq_tokens = getattr(getattr(transform_factory, "cfg", None), "freq_tokens", None)
+        if self.pad_multiple and self.pad_freq_tokens and any(s % self.pad_multiple for s in self.seq_lens):
+            logging.info(
+                "NaFlex pad-multiple=%d does not divide all seq_lens %s; a few extra cap-aligned batch shapes "
+                "will appear under torch.compile (pick seq_lens divisible by %d to avoid).",
+                self.pad_multiple, self.seq_lens, self.pad_multiple,
+            )
+
+        self.patch_sizes, self.patch_size_probs, self.variable_patch_size = resolve_patch_cfg(
+            patch_size=patch_size,
+            patch_size_choices=patch_size_choices,
+            patch_size_choice_probs=patch_size_choice_probs,
+        )
+        self.model_patch_size = to_2tuple(model_patch_size) if model_patch_size is not None else None
+        self.transforms: Dict[Tuple[int, int], Optional[Callable]] = {}
+        self.patchifiers: List[Callable] = []
+
+        for patch_idx, patch_size_tuple in enumerate(self.patch_sizes):
+            self.patchifiers.append(
+                Patchify(
+                    patch_size=patch_size_tuple,
+                    flatten_patches=(
+                        patch_size_tuple == self.model_patch_size
+                        if self.model_patch_size is not None
+                        else not self.variable_patch_size
+                    ),
+                )
+            )
+            for seq_len in self.seq_lens:
+                self.transforms[(seq_len, patch_idx)] = transform_factory(
+                    max_seq_len=seq_len,
+                    patch_size=patch_size_tuple,
+                )
+
+        if train_num_samples is not None:
+            self._create_schedule_from_num_samples(int(train_num_samples))
+        else:
+            self._create_schedule_from_num_tokens(int(train_num_tokens))
+
+    def _next_seq_len(self, generator: torch.Generator) -> int:
+        # Seeded generator -> deterministic + identical across ranks, so the schedule stays DDP-synced.
+        if self.seq_len_probs is None:
+            seq_idx = torch.randint(0, len(self.seq_lens), (1,), generator=generator).item()
+        else:
+            probs = torch.tensor(self.seq_len_probs, dtype=torch.float32)
+            seq_idx = int(torch.multinomial(probs, 1, generator=generator).item())
+        return self.seq_lens[seq_idx]
+
+    def _create_schedule_from_num_samples(self, num_samples: int) -> None:
+        samples_per_rank = _padded_per_rank(num_samples, self.distributed, self.world_size)
+        remaining_samples = samples_per_rank
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+
+        schedule = []
+        while remaining_samples > 0:
+            seq_len = self._next_seq_len(generator)
+            batch_size = calculate_naflex_batch_size(
+                tokens_per_batch=self.max_tokens_per_batch,
+                seq_len=seq_len + self.per_row_text_tokens,  # row cost = primary bucket + text cap
+                max_size=remaining_samples,
+                divisor=self.batch_divisor,
+                rounding="floor",
+            )
+            batch_size = min(max(1, int(batch_size)), remaining_samples)
+            schedule.append((seq_len, batch_size))
+            remaining_samples -= batch_size
+
+        self._canonical_batch_schedule = schedule
+        self._num_batches_per_rank = len(schedule)
+        self._num_samples_per_rank = sum(batch_size for _, batch_size in schedule)
+
+    def _create_schedule_from_num_tokens(self, num_tokens: int) -> None:
+        tokens_per_rank = _padded_per_rank(num_tokens, self.distributed, self.world_size)
+        remaining_tokens = tokens_per_rank
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+
+        schedule = []
+        while remaining_tokens > 0:
+            seq_len = self._next_seq_len(generator)
+            batch_size = calculate_naflex_batch_size(
+                tokens_per_batch=min(self.max_tokens_per_batch, remaining_tokens),
+                seq_len=seq_len + self.per_row_text_tokens,  # row cost = primary bucket + text cap
+                divisor=self.batch_divisor,
+                rounding="floor",
+            )
+            batch_size = max(1, int(batch_size))
+            schedule.append((seq_len, batch_size))
+            remaining_tokens -= batch_size * seq_len
+
+        self._canonical_batch_schedule = schedule
+        self._num_batches_per_rank = len(schedule)
+        self._num_samples_per_rank = sum(batch_size for _, batch_size in schedule)
+
+    @property
+    def num_batches(self) -> int:
+        return self._num_batches_per_rank
+
+    @property
+    def num_samples(self) -> int:
+        if self.distributed:
+            return self._num_samples_per_rank * self.world_size
+        return self._num_samples_per_rank
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def _worker_padded_schedule(self, num_workers: int) -> List[Tuple[int, int]]:
+        return self.pad_schedule_for_workers(
+            list(self._canonical_batch_schedule),
+            max(1, num_workers),
+        )
+
+    def epoch_schedule(self, epoch: int, num_workers: int = 1) -> List[Tuple[int, int]]:
+        schedule = self._worker_padded_schedule(num_workers)
+        if self.shuffle:
+            random.Random(self.seed + epoch).shuffle(schedule)
+        return schedule
+
+    @staticmethod
+    def pad_schedule_for_workers(
+            schedule: List[Tuple[int, int]],
+            num_workers: int,
+    ) -> List[Tuple[int, int]]:
+        if num_workers <= 1 or not schedule:
+            return schedule
+        target_batches = math.ceil(len(schedule) / num_workers) * num_workers
+        pad_batches = target_batches - len(schedule)
+        if pad_batches > 0:
+            repeats = math.ceil(pad_batches / len(schedule))
+            schedule = schedule + (schedule * repeats)[:pad_batches]
+        return schedule
+
+    def worker_schedule(self, epoch: int) -> List[Tuple[int, int]]:
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+        worker_id = worker_info.id if worker_info is not None else 0
+        schedule = self.epoch_schedule(epoch, num_workers=num_workers)
+        return schedule[worker_id::num_workers]
+
+    def num_batches_for_workers(self, num_workers: int) -> int:
+        return len(self._worker_padded_schedule(num_workers))
+
+    def num_samples_for_workers(self, num_workers: int) -> int:
+        schedule = self._worker_padded_schedule(num_workers)
+        num_samples_per_rank = sum(batch_size for _, batch_size in schedule)
+        if self.distributed:
+            return num_samples_per_rank * self.world_size
+        return num_samples_per_rank
+
+    def sample_patch_idx(self, generator: torch.Generator) -> int:
+        if not self.variable_patch_size:
+            return 0
+        probs = torch.tensor(self.patch_size_probs, dtype=torch.float32)
+        return int(torch.multinomial(probs, 1, generator=generator).item())
+
+    @staticmethod
+    def _collate_patch_dicts(
+            patch_dicts: List[Dict[str, torch.Tensor]],
+            max_seq_len: int,
+            pad_multiple: Optional[int] = None,
+            freq_tokens: Optional[int] = None,
+    ) -> Dict[str, torch.Tensor]:
+        if freq_tokens is None:
+            # Image / fixed-bucket path: pad to the sampled seq-len bucket (or batch-max if seq_len is 0/None).
+            max_patches = max_seq_len or max(pd["patches"].shape[0] for pd in patch_dicts)
+        else:
+            # Native audio: pad to batch max, optionally modulus-rounded, then clamp to the whole-column cap.
+            batch_max = max(pd["patches"].shape[0] for pd in patch_dicts)
+            max_patches = math.ceil(batch_max / pad_multiple) * pad_multiple if pad_multiple else batch_max
+            if max_seq_len:
+                max_patches = min(max_patches, freq_tokens * (max_seq_len // freq_tokens))
+        batch_size = len(patch_dicts)
+        first_patches = patch_dicts[0]["patches"]
+        patches = first_patches.new_zeros((batch_size, max_patches) + tuple(first_patches.shape[1:]))
+        first_coord = patch_dicts[0]["patch_coord"]
+        patch_coord = first_coord.new_zeros((batch_size, max_patches, 2))
+        patch_valid = torch.zeros((batch_size, max_patches), dtype=torch.bool)
+
+        for sample_idx, patch_dict in enumerate(patch_dicts):
+            num_patches = min(patch_dict["patches"].shape[0], max_patches)
+            patches[sample_idx, :num_patches] = patch_dict["patches"][:num_patches]
+            patch_coord[sample_idx, :num_patches] = patch_dict["patch_coord"][:num_patches]
+            patch_valid[sample_idx, :num_patches] = patch_dict["patch_valid"][:num_patches].bool()
+
+        return {
+            "patches": patches,
+            "patch_coord": patch_coord,
+            "patch_valid": patch_valid,
+            "seq_len": max_patches,
+        }
+
+    def process_sample(
+            self,
+            sample: Sample,
+            seq_len: int,
+            patch_idx: int,
+    ) -> Tuple[Dict[str, torch.Tensor], Any, Optional[Any]]:
+        """Decode + patchify one sample, preserving an optional target-validity sidecar.
+
+        Decode is the only step wrapped: a ``decode_fn`` failure on raw bytes raises ``SampleDecodeError`` so the
+        streaming batcher can skip + replenish. ``transform`` / ``patchify`` stay unguarded -- a failure there is
+        a bug, not bad data, and should propagate (mirrors the old decode-only ``handler=log_and_continue`` stage).
+        Keeping decode in this method (rather than inlined into ``run``) frees the full-res sample on return, so
+        the batcher's accumulator never holds a decoded image -- only the small patch dicts.
+        """
+        transform = self.transforms[(seq_len, patch_idx)]
+        patchify = self.patchifiers[patch_idx]
+        primary = sample[self.primary_key]
+        if self.decode_fn is not None:
+            try:
+                primary = self.decode_fn(primary)  # raw bytes -> PIL / (waveform, sr)
+            except Exception as ex:
+                raise SampleDecodeError(repr(ex)) from ex
+        primary = transform(primary) if transform is not None else primary
+        patch_dict = primary if isinstance(primary, dict) else patchify(primary)
+        return patch_dict, sample[self.target_key], sample.get(self.target_valid_key)
+
+    def collate_processed(
+            self,
+            patch_dicts: List[Dict[str, torch.Tensor]],
+            targets: List[Any],
+            seq_len: int,
+            target_valids: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        """Collate processed rows into a NaFlex batch, retaining exact target validity when supplied."""
+        primary_batch = self._collate_patch_dicts(
+            patch_dicts, seq_len, pad_multiple=self.pad_multiple, freq_tokens=self.pad_freq_tokens,
+        )
+        if self.pad_id is not None:
+            if target_valids is not None and any(value is not None for value in target_valids):
+                raise ValueError(
+                    f"NaFlex variable-text batches derive {self.target_valid_key!r} during padding; "
+                    "do not also supply a per-sample validity mask."
+                )
+            # Variable-length captions padded within the batch; tasks select the keys they consume, so the
+            # `<target>_valid` mask is always emitted.
+            text, text_valid = collate_variable_text(
+                targets, self.pad_id, pad_multiple=self.text_pad_multiple, pad_cap=self.text_pad_cap,
+            )
+            return {
+                self.primary_key: primary_batch,
+                self.target_key: text,
+                f"{self.target_key}_valid": text_valid,
+            }
+
+        output = {
+            self.primary_key: primary_batch,
+            self.target_key: default_collate(targets),
+        }
+        target_valid = _collate_optional_values(target_valids or [], self.target_valid_key)
+        if target_valid is not None:
+            output[self.target_valid_key] = target_valid
+        return output
+
+    def collate_batch(
+            self,
+            samples: List[Sample],
+            seq_len: int,
+            patch_idx: int,
+    ) -> Dict[str, Any]:
+        """Process + collate a pre-pulled list of samples (decode happens in-loop via ``process_sample``).
+
+        The streaming ``NaFlexBatcher.run`` path drives ``process_sample`` / ``collate_processed`` directly so it
+        can skip + replenish decode failures; this stays a convenience for map-style / test callers that hold a
+        fixed sample list. With ``decode_fn=None`` it is equivalent to the pre-refactor ``collate_batch``.
+        """
+        processed = [self.process_sample(sample, seq_len, patch_idx) for sample in samples]
+        patch_dicts = [patch_dict for patch_dict, _, _ in processed]
+        targets = [target for _, target, _ in processed]
+        target_valids = [target_valid for _, _, target_valid in processed]
+        return self.collate_processed(patch_dicts, targets, seq_len, target_valids)
+
+
+class NaFlexBatcher:
+    """WebDataset stage that turns primary/text samples into NaFlex dict batches."""
+
+    def __init__(
+            self,
+            train_num_samples: Optional[int] = None,
+            train_num_tokens: Optional[int] = None,
+            patch_size: Optional[PatchSize] = None,
+            patch_size_choices: Optional[Sequence[PatchSize]] = None,
+            patch_size_choice_probs: Optional[Sequence[float]] = None,
+            seq_lens: Sequence[int] = (128, 256, 576, 784, 1024),
+            seq_len_choice_probs: Optional[Sequence[float]] = None,
+            max_tokens_per_batch: int = 4096 * 4,
+            transform_factory: Optional[Callable[..., Callable]] = None,
+            seed: int = 42,
+            shuffle: bool = True,
+            distributed: bool = False,
+            rank: int = 0,
+            world_size: int = 1,
+            epoch=-1,
+            batch_divisor: int = 8,
+            primary_key: str = "image",
+            target_key: str = "text",
+            pad_id: Optional[int] = None,
+            per_row_text_tokens: int = 0,
+            pad_multiple: Optional[int] = None,
+            text_pad_multiple: Optional[int] = None,
+            text_pad_cap: Optional[int] = None,
+            decode_fn: Optional[Callable] = None,
+            decode_error_handler: Optional[Callable] = None,
+            drop_last: bool = True,
+            model_patch_size: Optional[PatchSize] = None,
+    ) -> None:
+        self.epoch = epoch
+        # `decode_fn` runs per-sample inside the scheduler; `decode_error_handler` (e.g. data.log_and_continue) is
+        # called by `run` to log skipped decode failures -- threaded in to avoid a naflex_data -> data import cycle.
+        # A falsy handler return re-raises (webdataset convention). `drop_last` follows PyTorch batching: True
+        # (train/DDP default) drops a trailing partial batch on source exhaustion so ranks never see a short
+        # batch; an eval caller would pass False to keep the final partial batch.
+        self.decode_error_handler = decode_error_handler
+        self.drop_last = bool(drop_last)
+        self.scheduler = NaFlexBatchScheduler(
+            train_num_samples=train_num_samples,
+            train_num_tokens=train_num_tokens,
+            patch_size=patch_size,
+            patch_size_choices=patch_size_choices,
+            patch_size_choice_probs=patch_size_choice_probs,
+            model_patch_size=model_patch_size,
+            seq_lens=seq_lens,
+            seq_len_choice_probs=seq_len_choice_probs,
+            max_tokens_per_batch=max_tokens_per_batch,
+            transform_factory=transform_factory,
+            seed=seed,
+            shuffle=shuffle,
+            distributed=distributed,
+            rank=rank,
+            world_size=world_size,
+            batch_divisor=batch_divisor,
+            primary_key=primary_key,
+            target_key=target_key,
+            pad_id=pad_id,
+            per_row_text_tokens=per_row_text_tokens,
+            pad_multiple=pad_multiple,
+            text_pad_multiple=text_pad_multiple,
+            text_pad_cap=text_pad_cap,
+            decode_fn=decode_fn,
+        )
+
+    @property
+    def num_batches(self) -> int:
+        return self.scheduler.num_batches
+
+    @property
+    def num_samples(self) -> int:
+        return self.scheduler.num_samples
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def __call__(self, src: Iterable[Sample]):
+        return self.run(src)
+
+    def num_batches_for_workers(self, num_workers: int) -> int:
+        return self.scheduler.num_batches_for_workers(num_workers)
+
+    def num_samples_for_workers(self, num_workers: int) -> int:
+        return self.scheduler.num_samples_for_workers(num_workers)
+
+    def run(self, src: Iterable[Sample]):
+        epoch = _advance_epoch(self)
+        generator = torch.Generator()
+        generator.manual_seed(self.scheduler.seed + epoch)
+        samples_iter = iter(src)
+
+        for seq_len, batch_size in self.scheduler.worker_schedule(epoch):
+            patch_idx = self.scheduler.sample_patch_idx(generator)
+            # Decode is deferred into `process_sample`, so only one full-res sample is alive at a time -- the
+            # accumulator holds small patch dicts, not `batch_size` decoded images (the OOM that motivated this).
+            # Skip + replenish on a decode failure so every batch stays exactly `batch_size`, which DDP feature
+            # all-gather requires (equal shapes across ranks). The train source is effectively infinite
+            # (RepeatedShardList), so StopIteration is abnormal here -- `drop_last` then governs the trailing
+            # partial batch (drop for train so ranks never see a short batch; keep for eval).
+            patch_dicts: List[Dict[str, torch.Tensor]] = []
+            targets: List[Any] = []
+            target_valids: List[Optional[Any]] = []
+            consecutive_failures = 0
+            while len(patch_dicts) < batch_size:
+                try:
+                    sample = next(samples_iter)
+                except StopIteration:
+                    break
+                if not isinstance(sample, dict):
+                    raise TypeError("NaFlexBatcher expects dictionary samples from the data pipeline.")
+                try:
+                    patch_dict, target, target_valid = self.scheduler.process_sample(sample, seq_len, patch_idx)
+                except SampleDecodeError as ex:
+                    # webdataset handler convention: a falsy return (or `reraise_exception`) means stop -> re-raise;
+                    # a truthy return (e.g. `log_and_continue`) or no handler means skip + replenish this sample.
+                    if self.decode_error_handler is not None and not self.decode_error_handler(ex):
+                        raise
+                    consecutive_failures += 1
+                    if consecutive_failures > _MAX_CONSECUTIVE_DECODE_FAILURES:
+                        raise
+                    continue
+                consecutive_failures = 0
+                patch_dicts.append(patch_dict)
+                targets.append(target)
+                target_valids.append(target_valid)
+            if len(patch_dicts) == batch_size or (patch_dicts and not self.drop_last):
+                yield self.scheduler.collate_processed(patch_dicts, targets, seq_len, target_valids)
+
+
+class NaFlexMapDatasetWrapper(IterableDataset):
+    """Map-style dataset wrapper that yields NaFlex dict batches."""
+
+    def __init__(
+            self,
+            base_dataset: Dataset,
+            train_num_tokens: Optional[int] = None,
+            patch_size: Optional[PatchSize] = None,
+            patch_size_choices: Optional[Sequence[PatchSize]] = None,
+            patch_size_choice_probs: Optional[Sequence[float]] = None,
+            seq_lens: Sequence[int] = (128, 256, 576, 784, 1024),
+            seq_len_choice_probs: Optional[Sequence[float]] = None,
+            max_tokens_per_batch: int = 4096 * 4,
+            transform_factory: Optional[Callable[..., Callable]] = None,
+            seed: int = 42,
+            shuffle: bool = True,
+            distributed: bool = False,
+            rank: int = 0,
+            world_size: int = 1,
+            epoch=-1,
+            batch_divisor: int = 8,
+            pad_id: Optional[int] = None,
+            per_row_text_tokens: int = 0,
+            text_pad_multiple: Optional[int] = None,
+            text_pad_cap: Optional[int] = None,
+            model_patch_size: Optional[PatchSize] = None,
+    ) -> None:
+        if not hasattr(base_dataset, '__len__') or not hasattr(base_dataset, '__getitem__'):
+            raise TypeError("NaFlex map batching requires a map-style dataset.")
+
+        self.base_dataset = base_dataset
+        self.seed = int(seed)
+        self.shuffle = bool(shuffle)
+        self.distributed = bool(distributed)
+        self.rank = int(rank) if distributed else 0
+        self.world_size = int(world_size) if distributed else 1
+        self.epoch = epoch
+
+        train_num_samples = None if train_num_tokens is not None else len(base_dataset)
+        self.scheduler = NaFlexBatchScheduler(
+            train_num_samples=train_num_samples,
+            train_num_tokens=train_num_tokens,
+            patch_size=patch_size,
+            patch_size_choices=patch_size_choices,
+            patch_size_choice_probs=patch_size_choice_probs,
+            model_patch_size=model_patch_size,
+            seq_lens=seq_lens,
+            seq_len_choice_probs=seq_len_choice_probs,
+            max_tokens_per_batch=max_tokens_per_batch,
+            transform_factory=transform_factory,
+            seed=seed,
+            shuffle=shuffle,
+            distributed=distributed,
+            rank=rank,
+            world_size=world_size,
+            batch_divisor=batch_divisor,
+            pad_id=pad_id,
+            per_row_text_tokens=per_row_text_tokens,
+            text_pad_multiple=text_pad_multiple,
+            text_pad_cap=text_pad_cap,
+        )
+
+    def __len__(self) -> int:
+        return self.scheduler.num_batches
+
+    def num_batches_for_workers(self, num_workers: int) -> int:
+        return self.scheduler.num_batches_for_workers(num_workers)
+
+    def num_samples_for_workers(self, num_workers: int) -> int:
+        return self.scheduler.num_samples_for_workers(num_workers)
+
+    def _epoch_indices(self, epoch: int, samples_per_rank: int) -> List[int]:
+        dataset_len = len(self.base_dataset)
+        if dataset_len <= 0:
+            raise ValueError("NaFlex map batching requires at least one sample.")
+
+        total_samples = samples_per_rank * self.world_size if self.distributed else samples_per_rank
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + epoch)
+        indices = []
+        while len(indices) < total_samples:
+            if self.shuffle:
+                indices.extend(torch.randperm(dataset_len, generator=generator).tolist())
+            else:
+                indices.extend(range(dataset_len))
+        indices = indices[:total_samples]
+
+        if self.distributed:
+            return indices[self.rank::self.world_size]
+        return indices
+
+    def __iter__(self):
+        epoch = _advance_epoch(self)
+        worker_info = torch.utils.data.get_worker_info()
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+        worker_id = worker_info.id if worker_info is not None else 0
+
+        schedule = self.scheduler.epoch_schedule(epoch, num_workers=num_workers)
+        samples_per_rank = sum(batch_size for _, batch_size in schedule)
+        rank_indices = self._epoch_indices(epoch, samples_per_rank)
+
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + epoch)
+
+        index_offset = 0
+        for batch_idx, (seq_len, batch_size) in enumerate(schedule):
+            batch_indices = rank_indices[index_offset:index_offset + batch_size]
+            index_offset += batch_size
+            if batch_idx % num_workers != worker_id:
+                continue
+
+            patch_idx = self.scheduler.sample_patch_idx(generator)
+            samples = [self.base_dataset[idx] for idx in batch_indices]
+            yield self.scheduler.collate_batch(samples, seq_len, patch_idx)

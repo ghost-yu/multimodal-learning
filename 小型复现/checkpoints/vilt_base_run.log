@@ -1,0 +1,24 @@
+
+Loading weights:   0%|          | 0/206 [00:00<?, ?it/s]
+Loading weights: 100%|��������������������| 206/206 [00:00<00:00, 16463.61it/s]
+[transformers] ViltForImageAndTextRetrieval LOAD REPORT from: C:\Users\hgfhg\Documents\ChatGPT\��ģ̬\С�͸���\pretrained\vilt-mlm-itm
+Key                                  | Status     | 
+-------------------------------------+------------+-
+itm_score.fc.weight                  | UNEXPECTED | 
+itm_score.fc.bias                    | UNEXPECTED | 
+mlm_score.transform.LayerNorm.bias   | UNEXPECTED | 
+mlm_score.bias                       | UNEXPECTED | 
+mlm_score.transform.dense.bias       | UNEXPECTED | 
+mlm_score.decoder.weight             | UNEXPECTED | 
+mlm_score.transform.LayerNorm.weight | UNEXPECTED | 
+mlm_score.transform.dense.weight     | UNEXPECTED | 
+rank_output.weight                   | MISSING    | 
+rank_output.bias                     | MISSING    | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+ͨ��Ԥѵ�� ViLT | ѵ��ͼ 64 | ��֤ͼ 16 | cuda
+΢��ǰ | ��ѡһ 100% | �ֲ� 9.548 | ͼ���� R@1 100% | ����ͼ R@1 94%
+�� 1/1 �� | ѵ����ʧ 0.003 | ��֤��ѡһ 100% | �ֲ� 9.935
+΢���� | ͼ���� R@1 100% | ����ͼ R@1 94%

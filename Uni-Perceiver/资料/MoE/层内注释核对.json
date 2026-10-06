@@ -1,0 +1,7 @@
+{
+  "file": "Uni-Perceiver\\uniperceiver\\modeling\\layers\\transformer_encoder_moe_layer.py",
+  "comments_added": 149,
+  "ast_equal_before": true,
+  "ast_equal_HEAD": true,
+  "full_model_runtime": false
+}

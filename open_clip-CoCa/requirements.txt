@@ -1,0 +1,8 @@
+torch>=2.6
+torchvision
+regex
+ftfy
+tqdm
+huggingface_hub
+safetensors
+timm>=1.0.29

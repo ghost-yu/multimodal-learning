@@ -1,0 +1,43 @@
+# 预训练标注 JSON 列表；以下是论文作者机器上的路径，本机运行须换成真实文件。
+train_file: ['/export/share/junnan-li/VL_pretrain/annotation/coco_karpathy_train.json',
+             '/export/share/junnan-li/VL_pretrain/annotation/vg_caption.json',
+             ]
+# 可选的 LAION JSON 分片目录；空字符串表示只使用上面的 train_file。
+laion_path: ''   
+
+# size of vit model; base or large
+# ViT-Base 是 12 层/768 维；Large 更大、更耗显存。
+vit: 'base'
+# 是否用梯度检查点换取更低显存占用。
+vit_grad_ckpt: False
+# 若启用检查点，末尾多少个 ViT block 使用它。
+vit_ckpt_layer: 0
+
+# 图片统一裁剪/缩放到 224×224。
+image_size: 224
+# 每个 GPU 每个 batch 的样本数；队列更新使用所有 GPU 的总 batch。
+batch_size: 75
+
+# 历史图文向量队列长度，为 ITA 提供更多负候选。
+queue_size: 57600
+# 教师软概率与真配对硬标签混合的最终教师权重。
+alpha: 0.4
+
+# optimizer
+# AdamW 对普通权重施加的衰减系数。
+weight_decay: 0.05
+# 预热结束时的学习率。
+init_lr: 3e-4
+# 后续每轮衰减时的学习率下限。
+min_lr: 1e-6
+# 第 0 轮预热的起始学习率。
+warmup_lr: 1e-6
+# 每个 epoch 的学习率衰减倍率。
+lr_decay_rate: 0.9
+# 训练轮数；每轮遍历一次当前预训练数据。
+max_epoch: 20
+# 第 0 轮内用前 3000 个 batch 逐步提高学习率。
+warmup_steps: 3000
+
+
+

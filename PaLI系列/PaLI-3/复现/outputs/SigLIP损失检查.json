@@ -1,0 +1,20 @@
+{
+  "scope": "纯 Python 数值公式检查，不是原 JAX 训练器运行",
+  "logits": [
+    [
+      1.0,
+      -1.0
+    ],
+    [
+      -1.0,
+      1.0
+    ]
+  ],
+  "loss": 0.6265233750364457,
+  "expected_loss": 0.6265233750364457,
+  "normalization": "1/B",
+  "bias_gradient_at_minus_one": 0.0,
+  "bias_gradient_at_zero": 0.3807970779778824,
+  "finite_difference_at_zero": 0.3807970779812208,
+  "checks_passed": true
+}

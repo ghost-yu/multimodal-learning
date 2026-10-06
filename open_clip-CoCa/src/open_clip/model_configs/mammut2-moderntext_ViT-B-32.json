@@ -1,0 +1,36 @@
+{
+    "embed_dim": 512,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 12,
+        "width": 768,
+        "patch_size": 32,
+        "output_tokens": true,
+        "pool_type": "avg",
+        "final_ln_after_pool": true
+    },
+    "multimodal_cfg": {
+        "text_arch": "modern",
+        "context_length": 128,
+	"variable_text": true,
+	"vocab_size": 50260,
+        "pad_id": 50258,
+        "bos_id": 50259,
+        "eos_id": 50257,
+	"width": 512,
+        "heads": 8,
+        "layers": 12,
+        "cross_attn_ratio": 2,
+        "pos_embed": "rope",
+        "mlp_type": "swiglu",
+        "norm_type": "rmsnorm",
+        "norm_eps": 1e-06,
+        "qk_norm": true,
+        "attn_gated": true,
+        "tokenizer_type": "tiktoken",
+        "tiktoken_name": "r50k_base",
+        "tokenizer_kwargs": {
+            "clean": "whitespace"
+        }
+    }
+}

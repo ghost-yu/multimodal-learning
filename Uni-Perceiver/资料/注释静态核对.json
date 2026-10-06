@@ -1,0 +1,37 @@
+[
+  {
+    "file": "uniperceiver/modeling/predictor/embed_cls_predictor.py",
+    "ast_equals_git_head": true,
+    "git_head": "a8c9e37ae25d9526a208c8f7d4403f32f99e7a72"
+  },
+  {
+    "file": "uniperceiver/modeling/encoder/unified_bert_encoder.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  },
+  {
+    "file": "uniperceiver/modeling/layers/transformer_encoder_layer.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  },
+  {
+    "file": "uniperceiver/task_moe/layer.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  },
+  {
+    "file": "uniperceiver/task_moe/experts.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  },
+  {
+    "file": "uniperceiver/task_moe/gate.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  },
+  {
+    "file": "uniperceiver/datasets/moe_embeddings.py",
+    "ast_equals_before_comments": true,
+    "ast_equals_git_head": true
+  }
+]

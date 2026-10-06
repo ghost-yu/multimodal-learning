@@ -1,0 +1,234 @@
+{
+  "scope": "原Handler/BeamHypotheses/损失类局部运行，模型和tokenizer为模拟，不是BEiT-3真实推理",
+  "torch_version": "2.6.0+cu124",
+  "normal_eos_case": {
+    "max_len": 8,
+    "predictions": [
+      {
+        "image_id": 10,
+        "caption": "a dog"
+      },
+      {
+        "image_id": 11,
+        "caption": "a dog"
+      }
+    ],
+    "decoded_ids": [
+      [
+        0,
+        4,
+        5,
+        3,
+        2,
+        1,
+        1,
+        1
+      ],
+      [
+        0,
+        4,
+        5,
+        3,
+        2,
+        1,
+        1,
+        1
+      ]
+    ],
+    "calls": [
+      {
+        "logical_text_len": 2,
+        "image_present": true,
+        "input_ids": [
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "previous_cache_length": 0
+      },
+      {
+        "logical_text_len": 3,
+        "image_present": false,
+        "input_ids": [
+          [
+            4,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            6,
+            3
+          ]
+        ],
+        "previous_cache_length": 4
+      },
+      {
+        "logical_text_len": 4,
+        "image_present": false,
+        "input_ids": [
+          [
+            5,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            6,
+            3
+          ]
+        ],
+        "previous_cache_length": 5
+      },
+      {
+        "logical_text_len": 5,
+        "image_present": false,
+        "input_ids": [
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            6,
+            3
+          ]
+        ],
+        "previous_cache_length": 6
+      }
+    ]
+  },
+  "max_length_case": {
+    "max_len": 4,
+    "predictions": [
+      {
+        "image_id": 10,
+        "caption": "a"
+      },
+      {
+        "image_id": 11,
+        "caption": "a"
+      }
+    ],
+    "decoded_ids": [
+      [
+        0,
+        4,
+        3,
+        2
+      ],
+      [
+        0,
+        4,
+        3,
+        2
+      ]
+    ],
+    "calls": [
+      {
+        "logical_text_len": 2,
+        "image_present": true,
+        "input_ids": [
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "previous_cache_length": 0
+      },
+      {
+        "logical_text_len": 3,
+        "image_present": false,
+        "input_ids": [
+          [
+            4,
+            3
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            6,
+            3
+          ]
+        ],
+        "previous_cache_length": 4
+      },
+      {
+        "logical_text_len": 4,
+        "image_present": false,
+        "input_ids": [
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "previous_cache_length": 5
+      }
+    ]
+  },
+  "label_smoothed_kl": 0.09432826191186905,
+  "manual_kl": 0.09432826191186905,
+  "finite_gradients": true
+}

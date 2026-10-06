@@ -1,0 +1,92 @@
+{
+  "torch_version": "2.6.0+cu124",
+  "device": "cpu",
+  "source_function": "Uni-Perceiver\\uniperceiver\\modeling\\encoder\\unified_bert_encoder.py",
+  "execution": "Extracted actual function AST; no model or repository import",
+  "caption_matrix_matches_all_64_cells": true,
+  "non_caption_returns_none": true,
+  "missing_text_spe_cat_returns_none": true,
+  "matrix": [
+    [
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      1,
+      1,
+      1,
+      0,
+      1,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0,
+      1
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0
+    ]
+  ],
+  "scope": "Local mask function check only; not full model reproduction"
+}

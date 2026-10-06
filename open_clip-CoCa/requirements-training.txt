@@ -1,0 +1,13 @@
+torch>=2.6
+torchvision
+webdataset>=0.2.5,<=0.2.86
+regex
+ftfy
+tqdm
+pandas
+braceexpand
+huggingface_hub
+safetensors
+transformers[sentencepiece]
+timm>=1.0.29
+fsspec

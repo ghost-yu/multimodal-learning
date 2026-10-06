@@ -1,0 +1,39 @@
+# train_file 是多个 JSON 标注路径；每条应提供 image 图片路径和 caption 描述。
+# 当前仓库没有附带这些 data 文件，运行前必须准备并核对实际路径。
+train_file: ['data/coco.json',
+               'data/vg.json',
+               'data/cc12m.json',
+               'data/cc3m_train.json',
+               'data/cc3m_val.json',
+               'data/sbu.json'               
+               ]
+# each train_file (json) contains a python list where each item is {'image': img_path, 'caption': text or list_of_text }               
+bert_config: 'configs/config_bert.json'
+
+# image_res 是输入像素边长；视觉 patch 边长在 model_pretrain.py 写为 16。
+image_res: 256
+# vision_width 是每个视觉 token 的内部维度；embed_dim 是图文对齐空间维度。
+vision_width: 768
+embed_dim: 256
+# batch_size 是每个分布式进程的 DataLoader 批量；8 进程时全局为 8*64=512。
+batch_size: 64
+# temp 是图文相似度 softmax 的温度；越小会放大分数差。
+temp: 0.07
+# MLM 每个可遮 token 被选中的概率。
+mlm_probability: 0.15
+# 历史图/文特征队列长度；momentum 是教师参数滑动平均系数。
+queue_size: 65536
+momentum: 0.995
+# alpha 是硬标签与动量教师软目标的混合权重，首轮从 0 暖起。
+alpha: 0.4
+
+# optimizer/schedular 由仓库工厂函数读取；原键名确实拼作 schedular。
+optimizer: {opt: adamW, lr: 1e-4, weight_decay: 0.02}
+schedular: {sched: cosine, lr: 1e-4, epochs: 30, min_lr: 1e-5, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 20, cooldown_epochs: 0}
+
+
+
+
+
+
+

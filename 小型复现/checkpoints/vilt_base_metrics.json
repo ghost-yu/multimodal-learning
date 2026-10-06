@@ -1,0 +1,14 @@
+{
+  "checkpoint": "dandelin/vilt-b32-mlm-itm",
+  "train_images": 64,
+  "validation_images": 16,
+  "epochs": 1,
+  "before_pairwise_accuracy": 1.0,
+  "after_pairwise_accuracy": 1.0,
+  "before_image_to_text_r1": 1.0,
+  "before_text_to_image_r1": 0.9375,
+  "after_image_to_text_r1": 1.0,
+  "after_text_to_image_r1": 0.9375,
+  "before_margin": 9.547993659973145,
+  "after_margin": 9.935195446014404
+}

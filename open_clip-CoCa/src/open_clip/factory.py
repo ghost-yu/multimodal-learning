@@ -1,0 +1,1516 @@
+import json
+import logging
+import os
+
+_logger = logging.getLogger(__name__)
+import re
+import warnings
+from copy import deepcopy
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, Union
+
+import torch
+
+from .convert import convert_state_dict
+from .model import CLIP, CustomTextCLIP, convert_weights_to_lp, convert_to_custom_text_state_dict,\
+    resize_pos_embed, get_cast_dtype, resize_text_pos_embed, set_model_preprocess_cfg
+from .clap_model import CLAP
+from .coca_model import CoCa
+from .mammut_model import MaMMUT
+from .naflex_genlip_model import NaFlexGenLip
+from .naflex_genlap_model import NaFlexGenLap
+from .loss import ClipLoss, DistillClipLoss, CoCaLoss, SigLipLoss, GenLipLoss
+from .model_traits import (
+    InputMode, ModelFamily, get_model_traits, traits_from_config, traits_from_model,
+    validate_distillation,
+)
+from .naflex_convert import apply_naflex_vision_config, convert_naflex_state_dict
+from .pretrained import get_pretrained_cfg, download_pretrained,\
+    list_pretrained_tags_by_model, download_pretrained_from_hf
+from .transform import (
+    AugmentationCfg,
+    PreprocessCfg,
+    image_transform_v2,
+    is_naflex_aug_cfg,
+    merge_preprocess_dict,
+    merge_preprocess_kwargs,
+    naflex_eval_transform_v2,
+)
+from .tokenizer import HFTokenizer, SimpleTokenizer, SigLipTokenizer, TikTokenTokenizer, Tokenizer, DEFAULT_CONTEXT_LENGTH
+
+HF_HUB_PREFIX = 'hf-hub:'
+_MODEL_CONFIG_PATHS = [Path(__file__).parent / f"model_configs/"]
+_MODEL_CONFIGS = {}  # directory (model_name: config) of model architecture configs
+
+
+def _natural_key(string_):
+    return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_.lower())]
+
+
+def _convert_legacy_mammut_cfg(model_cfg: dict) -> dict:
+    """Translate a LAION open_clip_mammut fork config into the current MaMMUT schema.
+
+    The fork configured its text decoder via ``text_cfg`` with ``does_full_decoding`` /
+    ``cross_attn_ratio`` flags. Here the decoder lives in ``multimodal_cfg`` (with no
+    ``text_cfg``), so fork-format configs (e.g. hf-hub openMaMMUT repos) are remapped,
+    with legacy pooling / masking defaults preserving the original numerics.
+    Non-MaMMUT configs pass through unchanged.
+    """
+    text_cfg = model_cfg.get('text_cfg')
+    if not isinstance(text_cfg, dict) or 'multimodal_cfg' in model_cfg:
+        return model_cfg
+    if not (text_cfg.get('does_full_decoding') or 'cross_attn_ratio' in text_cfg):
+        return model_cfg
+    if text_cfg.get('has_mlp') is False:
+        raise ValueError(
+            "Legacy MaMMUT configs with has_mlp=False (MLP folded into cross-attn blocks) are not supported."
+        )
+    multimodal_cfg = {
+        k: v for k, v in text_cfg.items()
+        if k not in ('does_full_decoding', 'output_tokens', 'has_mlp')
+    }
+    # legacy behaviour: unmasked mean pool over all positions, no pad attention mask, no text projection
+    multimodal_cfg.setdefault('pool_type', 'avg_all')
+    multimodal_cfg.setdefault('use_pad_mask', False)
+    multimodal_cfg.setdefault('proj_type', 'none')
+    out_cfg = {k: v for k, v in model_cfg.items() if k not in ('text_cfg', 'custom_text')}
+    out_cfg['multimodal_cfg'] = multimodal_cfg
+    return out_cfg
+
+
+def _translate_external_config(config: dict) -> dict:
+    """Normalize an externally sourced config (hf-hub / local-dir / user config file).
+
+    Applies fork-format translations (currently: legacy MaMMUT) to the model cfg whether it is
+    stored under a ``model_cfg`` key (full open_clip_config.json) or at the top level (bare model
+    config / registry file). Config translation happens once at ingestion; every consumer
+    (create_model, get_tokenizer, get_model_config, the builtin registry) sees one schema.
+    """
+    if 'model_cfg' in config:
+        config = dict(config)
+        config['model_cfg'] = _convert_legacy_mammut_cfg(config['model_cfg'])
+        return config
+    return _convert_legacy_mammut_cfg(config)
+
+
+def _rescan_model_configs():
+    global _MODEL_CONFIGS
+
+    config_ext = ('.json',)
+    config_files = []
+    for config_path in _MODEL_CONFIG_PATHS:
+        if config_path.is_file() and config_path.suffix in config_ext:
+            config_files.append(config_path)
+        elif config_path.is_dir():
+            for ext in config_ext:
+                config_files.extend(config_path.glob(f'*{ext}'))
+
+    for cf in config_files:
+        with open(cf, 'r') as f:
+            model_cfg = json.load(f)
+            try:
+                model_cfg = _translate_external_config(model_cfg)
+            except ValueError as e:
+                # one unsupported user config file must not break the whole registry scan
+                warnings.warn(f"Skipping model config {cf}: {e}")
+                continue
+            has_vision = all(a in model_cfg for a in ('embed_dim', 'vision_cfg', 'text_cfg'))
+            has_audio = all(a in model_cfg for a in ('embed_dim', 'audio_cfg', 'text_cfg'))
+            # GenLAP: generative audio model with a NaFlex spectrogram prefix (front-end key is
+            # 'audio_naflex_cfg', NOT 'audio_cfg' which is the CLAP key).
+            has_genlap = all(a in model_cfg for a in ('embed_dim', 'genlap_cfg', 'text_cfg'))
+            # MaMMUT: single text decoder in multimodal_cfg, no separate text_cfg
+            has_mammut = (
+                all(a in model_cfg for a in ('embed_dim', 'vision_cfg', 'multimodal_cfg'))
+                and 'text_cfg' not in model_cfg
+            )
+            if has_vision or has_audio or has_genlap or has_mammut:
+                _MODEL_CONFIGS[cf.stem] = model_cfg
+
+    _MODEL_CONFIGS = {k: v for k, v in sorted(_MODEL_CONFIGS.items(), key=lambda x: _natural_key(x[0]))}
+
+
+_rescan_model_configs()  # initial populate of model config registry
+
+
+def list_models():
+    """ enumerate available model architectures based on config files """
+    return list(_MODEL_CONFIGS.keys())
+
+
+def add_model_config(path):
+    """ add model config path or file and update registry """
+    if not isinstance(path, Path):
+        path = Path(path)
+    _MODEL_CONFIG_PATHS.append(path)
+    _rescan_model_configs()
+
+
+# Define Schema Prefixes as constants
+HF_HUB_PREFIX = 'hf-hub:'
+LOCAL_DIR_PREFIX = 'local-dir:'
+
+def parse_model_name(model_name: str) -> Tuple[Optional[str], str]:
+    """
+    Parses a model name string to identify a schema and the remaining identifier.
+
+    Args:
+        model_name: The model name string (e.g., 'ViT-B-32',
+                    'hf-hub:org/repo', 'local-dir:/path/to/dir',
+                    'local-dir:./relative/path').
+
+    Returns:
+        A tuple (schema, identifier):
+          - schema (Optional[str]): 'hf-hub', 'local-dir', or None if no schema detected.
+          - identifier (str): The part after the schema prefix, or the original
+                              string if no schema was present. For 'local-dir',
+                              this is the raw path string provided.
+    Raises:
+        ValueError: If a schema prefix is present but the identifier part is empty.
+    """
+    # Check for local directory schema first
+    if model_name.startswith(LOCAL_DIR_PREFIX):
+        # Extract the identifier (path) after the prefix
+        identifier = model_name[len(LOCAL_DIR_PREFIX):]
+        # Validate that the identifier (path) is not empty
+        if not identifier:
+            raise ValueError("Empty path specified after 'local-dir:' schema.")
+        # Return the schema and the raw path identifier
+        # Note: We don't resolve or fully validate the path here,
+        #       that's left to the calling function (e.g., using os.path.isdir)
+        return 'local-dir', identifier
+
+    # Check for Hugging Face Hub schema
+    elif model_name.startswith(HF_HUB_PREFIX):
+        # Extract the identifier (HF Hub ID) after the prefix
+        identifier = model_name[len(HF_HUB_PREFIX):]
+        # Validate that the identifier is not empty
+        if not identifier:
+            raise ValueError("Empty identifier specified after 'hf-hub:' schema.")
+        # Return the schema and the HF Hub ID
+        return 'hf-hub', identifier
+
+    # If neither schema prefix is found
+    else:
+        # No schema detected, return None for schema and the original string as identifier
+        return None, model_name
+
+
+def _get_hf_config(
+        model_id: str,
+        cache_dir: Optional[str] = None,
+):
+    """ Fetch model config from HuggingFace Hub.
+    """
+    config_path = download_pretrained_from_hf(
+        model_id,
+        filename='open_clip_config.json',
+        cache_dir=cache_dir,
+    )
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    return _translate_external_config(config)
+
+
+def get_model_config(model_name):
+    """ Fetch model config from schema specified location or local library configs.
+    """
+    loc, model_id = parse_model_name(model_name)
+    if loc == 'local-dir':
+        local_path = Path(model_id) / 'open_clip_config.json'
+        with open(local_path, 'r', encoding='utf-8') as f:
+            config = _translate_external_config(json.load(f))
+        return config.get('model_cfg', config)
+    elif loc == 'hf-hub':
+        config = _get_hf_config(model_id)  # translated at ingestion
+        return config.get('model_cfg', config)
+    elif model_name in _MODEL_CONFIGS:
+        return deepcopy(_MODEL_CONFIGS[model_name])
+    else:
+        return None
+
+
+def load_state_dict(
+        checkpoint_path: str,
+        device='cpu',
+        weights_only=True,
+):
+    # Check if safetensors or not and load weights accordingly
+    if str(checkpoint_path).endswith(".safetensors"):
+        from safetensors.torch import load_file
+        checkpoint = load_file(checkpoint_path, device=device)
+    else:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=weights_only)
+
+    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    else:
+        state_dict = checkpoint
+    if next(iter(state_dict.items()))[0].startswith('module'):
+        state_dict = {k[7:]: v for k, v in state_dict.items()}
+    return state_dict
+
+
+def load_checkpoint(
+        model: Union[CLIP, CustomTextCLIP],
+        checkpoint_path: str,
+        strict: bool = True,
+        weights_only: bool = True,
+        device='cpu',
+):
+    if Path(checkpoint_path).suffix in ('.npz', '.npy'):
+        # Separate path loading numpy big_vision (SigLIP) weights
+        from open_clip.convert import load_big_vision_weights
+        load_big_vision_weights(model, checkpoint_path)
+        return {}
+
+    state_dict = load_state_dict(checkpoint_path, device=device, weights_only=weights_only)
+
+    # Detect & convert 3rd party state_dicts -> open_clip
+    state_dict = convert_state_dict(model, state_dict)
+    state_dict = convert_naflex_state_dict(model, state_dict)
+
+    # Detect old format and make compatible with new format
+    if 'positional_embedding' in state_dict and not hasattr(model, 'positional_embedding'):
+        state_dict = convert_to_custom_text_state_dict(state_dict)
+
+    # correct if logit_scale differs in being scaler vs 1d param
+    if 'logit_scale' in state_dict and model.logit_scale.ndim != state_dict['logit_scale'].ndim:
+        state_dict['logit_scale'] = state_dict['logit_scale'].reshape(model.logit_scale.shape)
+
+    # correct if logit_bias differs in being scaler vs 1d param
+    if 'logit_bias' in state_dict and model.logit_bias.ndim != state_dict['logit_bias'].ndim:
+        state_dict['logit_bias'] = state_dict['logit_bias'].reshape(model.logit_bias.shape)
+
+    # If loading a non-SigLIP model for SigLIP training. See https://github.com/mlfoundations/open_clip/issues/712
+    if 'logit_bias' not in state_dict and model.logit_bias is not None:
+        state_dict["logit_bias"] = torch.zeros_like(state_dict["logit_scale"])
+
+    # Certain text transformers no longer expect position_ids after transformers==4.31
+    position_id_key = 'text.transformer.embeddings.position_ids'
+    if position_id_key in state_dict and not hasattr(model, position_id_key):
+        del state_dict[position_id_key]
+
+    resize_pos_embed(state_dict, model)
+    resize_text_pos_embed(state_dict, model)
+
+    # Finally, load the massaged state_dict into model
+    incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+    return incompatible_keys
+
+
+def _find_checkpoint_in_dir(dir_path: Path) -> Optional[str]:
+    checkpoints = list(dir_path.glob('*.safetensors')) + list(dir_path.glob('*.bin')) + list(dir_path.glob('*.pth'))
+    if not checkpoints:
+        return None
+    checkpoints.sort()
+    checkpoints.sort(key=lambda x: x.suffix == '.safetensors', reverse=True)
+    preferred_order = [
+        "open_clip_model.safetensors", "open_clip_pytorch_model.safetensors",
+        "open_clip_pytorch_model.bin",  "open_clip_pytorch_model.pth",
+        "model.safetensors", "pytorch_model.bin", "pytorch_model.pth", "model.pth"
+    ]
+    preferred_checkpoints = [c for c in checkpoints if c.name in preferred_order]
+    if preferred_checkpoints:
+        preferred_checkpoints.sort(key=lambda x: preferred_order.index(x.name))
+        chosen = preferred_checkpoints[0]
+        _logger.info(f"Found preferred checkpoint file: {chosen.name} in {dir_path}")
+        return str(chosen)
+    chosen = checkpoints[0]
+    _logger.warning(
+        f"Multiple checkpoints found in {dir_path}: {[c.name for c in checkpoints]}. Using '{chosen.name}'.")
+    return str(chosen)
+
+
+def create_model(
+        model_name: str, # Can contain schemas 'hf-hub:' or 'local-dir:'
+        pretrained: Optional[str] = None, # Used ONLY if model_name has NO schema
+        load_weights: bool = True,
+        precision: str = 'fp32',
+        device: Union[str, torch.device] = 'cpu',
+        force_quick_gelu: bool = False,
+        force_custom_text: bool = False,
+        force_patch_dropout: Optional[float] = None,
+        force_image_size: Optional[Union[int, Tuple[int, int]]] = None,
+        force_preprocess_cfg: Optional[Dict[str, Any]] = None,
+        force_context_length: Optional[int] = None,
+        force_naflex_vision: bool = False,
+        force_naflex_patch_interp: bool = False,
+        pretrained_image: bool = False, # Load default base image weights (at creation, if no CLIP weights)
+        pretrained_text: bool = True,  # Load default base text weights (at creation, if no CLIP weights) - NEW
+        pretrained_image_path: Optional[str] = None, # Load specific image weights from file (after creation)
+        pretrained_text_path: Optional[str] = None, # Load specific text weights from file (after creation)
+        pretrained_audio_path: Optional[str] = None, # Load specific audio encoder weights from file (after creation)
+        cache_dir: Optional[str] = None,
+        output_dict: Optional[bool] = None,
+        require_pretrained: bool = False,
+        weights_only: bool = True,
+        **model_kwargs,
+) -> torch.nn.Module:
+    """
+    Creates and configures a contrastive vision-language model.
+
+    `model_name` specifies architecture/config source:
+      - 'ViT-B-32': Built-in model name. `pretrained` specifies CLIP weights source (tag or file path).
+      - 'hf-hub:org/repo': Loads config/weights from HF Hub. `pretrained` is IGNORED.
+      - 'local-dir:/path/to/folder': Loads config/weights from local dir. `pretrained` is IGNORED.
+
+    Base tower weights loading controlled by `pretrained_image` and `pretrained_text` flags,
+    only effective if no full CLIP checkpoint (`pretrained` or schema source) is loaded.
+
+    Tower-specific weights can be loaded *after* creation via `pretrained_image_path`
+    and `pretrained_text_path` / `pretrained_audio_path`.
+
+    Args:
+        model_name: Model identifier, potentially with schema ('hf-hub:', 'local-dir:').
+        pretrained: Source for CLIP weights (tag or file path) ONLY if model_name has no schema.
+        load_weights: Load the resolved pretrained weights if True, otherwise random init or tower overrides only.
+        precision: Model precision ('fp32', 'fp16', 'bf16', ...).
+        device: Device ('cpu', 'cuda', ...).
+        force_quick_gelu: Force use of QuickGELU activation in model config.
+        force_custom_text: Force use of custom text encoder architecture.
+        force_patch_dropout: Override patch dropout value in model config.
+        force_image_size: Override image size in model config.
+        force_preprocess_cfg: Dict to override specific FINAL preprocessing parameters.
+        force_context_length: Override context length in model config.
+        force_naflex_vision: Convert compatible native OpenCLIP ViT or timm EVA/ViT vision towers to NaFlexVit.
+        force_naflex_patch_interp: Override ``vision_cfg.naflex_patch_interp`` to True: enable timm's parameter-free
+            patch-embed weight interpolator on a NaFlexVit vision tower so it accepts patches at sizes other than
+            its base patch size (variable-patch NaFlex training / eval). State-dict compatible. A model trained
+            this way should declare ``naflex_patch_interp`` in its config so plain loading needs no override.
+        pretrained_image: Load default base weights for image tower at creation if no CLIP weights loaded.
+        pretrained_text: Load default base weights for text tower at creation if no CLIP weights loaded (default: True).
+        pretrained_image_path: Path to load weights specifically into image tower after creation.
+        pretrained_text_path: Path to load weights specifically into text tower after creation.
+        pretrained_audio_path: Path to load weights specifically into audio encoder after creation.
+        cache_dir: Cache directory for downloads.
+        output_dict: If True and model supports it, return dict output.
+        require_pretrained: Raise error if no `pretrained` CLIP weights loaded when required.
+        weights_only: Use weights_only=True for torch.load (safer).
+        **model_kwargs: Additional keyword arguments for model constructor (highest override priority).
+
+    Returns:
+        The created model instance.
+    """
+    schema, identifier = parse_model_name(model_name)
+    if 'pretrained_hf' in model_kwargs:
+        # for backwards compat, override pretrained_text
+        pretrained_text = model_kwargs.pop('pretrained_hf')
+    if isinstance(device, str):
+        device = torch.device(device)
+
+    model_cfg = None
+    preprocess_cfg = asdict(PreprocessCfg())  # Populate with defaults
+    checkpoint_path = None # Final path for full CLIP weights
+    pretrained_cfg_for_tag = None # Store tag config if pretrained is a tag and schema is None
+
+    _logger.info(f"Parsing model identifier. Schema: {schema}, Identifier: {identifier}")
+    if schema and pretrained:
+        _logger.warning(f"Ignoring `pretrained='{pretrained}'` because `model_name` has '{schema}' schema.")
+        pretrained = None  # Nullify pretrained as it's ignored
+
+    # Handle schemas first - these ignore the `pretrained` argument
+    if schema == 'local-dir':
+        # Handle local directory schema
+        local_path = Path(identifier)
+        if not local_path.is_dir():
+            raise FileNotFoundError(f"Directory specified via 'local-dir:' schema not found: {local_path}")
+
+        local_config_path = local_path / 'open_clip_config.json'
+        _logger.info(f"Attempting to load config from local dir: {local_config_path}")
+        if local_config_path.is_file():
+            try:
+                # Try loading and parsing the JSON config
+                with open(local_config_path, 'r', encoding='utf-8') as f:
+                    local_json_config = _translate_external_config(json.load(f))
+                # Check if the required 'model_cfg' key is present
+                if 'model_cfg' in local_json_config:
+                    # Load model config and merge preprocess config
+                    model_cfg = local_json_config['model_cfg']
+                    preprocess_cfg = merge_preprocess_dict(preprocess_cfg, local_json_config.get('preprocess_cfg', {}))
+                    _logger.info(f"Loaded model config and preprocess from: {local_config_path}")
+                    # Look for weights checkpoint in the same directory
+                    checkpoint_path = _find_checkpoint_in_dir(local_path)
+                    if checkpoint_path:
+                        _logger.info(f"Found CLIP weights in local folder: {checkpoint_path}")
+                    else:
+                        _logger.warning(f"Local config loaded, but no CLIP weights found in {local_path}")
+                else:
+                    # Config file exists but lacks the necessary key
+                    raise ValueError(f"Local config {local_config_path} missing 'model_cfg'.")
+            except Exception as e:
+                # Handle JSON parsing errors or other exceptions during config load
+                raise ValueError(f"Could not load valid config from specified 'local-dir:{identifier}': {e}") from e
+        else:
+            # Directory exists but the config file is missing
+            raise FileNotFoundError(f"'local-dir:' specified, but config file missing: {local_config_path}")
+
+    elif schema == 'hf-hub':
+        # Handle Hugging Face Hub schema
+        model_id = identifier
+        _logger.info(f"Attempting to load config from HF Hub: {model_id}")
+        try:
+            # Fetch configuration from Hugging Face Hub
+            hf_config = _get_hf_config(model_id, cache_dir=cache_dir)
+            if 'model_cfg' not in hf_config:
+                raise RuntimeError(f"'model_cfg' not found in config from {model_id}")
+            # Load model config and merge preprocess config
+            model_cfg = hf_config['model_cfg']
+            preprocess_cfg = merge_preprocess_dict(preprocess_cfg, hf_config.get('preprocess_cfg', {}))
+            _logger.info(f"Loaded model config from HF Hub: {model_id}")
+            # Attempt find default weights file from the Hub repo
+            try:
+                checkpoint_path = download_pretrained_from_hf(model_id, cache_dir=cache_dir)
+                _logger.info(f"Found default weights file on HF Hub: {checkpoint_path}")
+            except Exception as e_weights:
+                # Log warning if weights download fails, but proceed (might only need config)
+                _logger.warning(f"Could not find/download default weights on HF Hub for {model_id}: {e_weights}")
+        except Exception as e_config:
+            # Handle errors during config fetching from HF Hub
+            raise RuntimeError(f"Failed initial config/weights load from HF Hub {model_id}: {e_config}") from e_config
+
+    # No Schema Prefix - Use built-in name + pretrained arg (tag or file)
+    elif schema is None:
+        # Handle model names without schema prefix
+        # Use identifier (original model_name) and clean it for lookup
+        model_name_cleaned = identifier.replace('/', '-')
+
+        # Get base config from built-in name using the cleaned identifier
+        model_cfg = get_model_config(model_name_cleaned)
+        if model_cfg is None:
+            # Raise error if no matching built-in config found
+            raise RuntimeError(
+                f"Model config for '{model_name_cleaned}' not found in built-ins. Available: {list_models()}")
+        _logger.info(f"Loaded built-in {model_name_cleaned} model config.")
+
+        # Determine checkpoint path and update preprocess_cfg based on `pretrained` arg (tag or file)
+        if pretrained:
+            # Check if `pretrained` is a known tag
+            pretrained_cfg_for_tag = get_pretrained_cfg(model_name_cleaned, pretrained)
+            if pretrained_cfg_for_tag:
+                try:
+                    # Download weights associated with the tag
+                    checkpoint_path = download_pretrained(pretrained_cfg_for_tag, cache_dir=cache_dir)
+                    preprocess_cfg = merge_preprocess_dict(preprocess_cfg, pretrained_cfg_for_tag)
+                    # QuickGELU compatibility check will happen in after force overrides
+                except Exception as e:
+                    _logger.error(f"Failed to download weights for tag '{pretrained}': {e}")
+                    raise RuntimeError(f"Failed to download weights for tag '{pretrained}': {e}")
+            elif os.path.isfile(pretrained):
+                # Handle pretrained file path
+                _logger.info(f"`pretrained` specifies file path: {pretrained}")
+                checkpoint_path = pretrained
+            else:
+                _logger.error(
+                    f"Pretrained tag or path ({pretrained}) for '{model_name_cleaned}' not found. "
+                    f"Available tags: {list_pretrained_tags_by_model(model_name_cleaned)}"
+                )
+                raise RuntimeError(f"Pretrained value '{pretrained}' is not a known tag or valid file path")
+
+    # Apply model config overrides
+    if model_cfg is None:
+        raise RuntimeError("Model configuration could not be determined after Stage 1.")
+    # MaMMUT models have no text_cfg, the decoder in multimodal_cfg is the text tower
+    # (external configs are translated at ingestion: _get_hf_config / local-dir load / registry scan)
+    text_cfg = model_cfg.get('text_cfg') or model_cfg.get('multimodal_cfg') or {}
+    is_audio_model = 'audio_cfg' in model_cfg
+    vision_cfg = model_cfg.get('vision_cfg', {})
+    if force_quick_gelu:
+        model_cfg["quick_gelu"] = True
+    if is_audio_model:
+        if force_patch_dropout is not None:
+            warnings.warn("force_patch_dropout is ignored for CLAP audio models.", UserWarning)
+        if force_image_size is not None:
+            warnings.warn("force_image_size is ignored for CLAP audio models.", UserWarning)
+        if force_naflex_vision:
+            # Nothing to convert: --use-naflex passes this for every model, NaFlex audio towers included.
+            _logger.info("force_naflex_vision is a no-op for audio models (no vision tower).")
+        if force_naflex_patch_interp:
+            raise ValueError("force_naflex_patch_interp is only valid for image models.")
+    else:
+        if force_patch_dropout is not None:
+            vision_cfg["patch_dropout"] = force_patch_dropout
+        if force_image_size is not None:
+            vision_cfg["image_size"] = force_image_size
+        if force_naflex_patch_interp:
+            vision_cfg["naflex_patch_interp"] = True
+        if force_naflex_vision:
+            pre_traits = traits_from_config(model_cfg)
+            if pre_traits.requires_naflex_data or pre_traits.image_input is InputMode.NONE:
+                # NaFlex-native (GenLIP embed) or no vision tower (GenLAP): nothing to convert.
+                _logger.info(f"force_naflex_vision is a no-op for {pre_traits.family.value} models.")
+            else:
+                apply_naflex_vision_config(model_cfg)
+    if force_context_length is not None:
+        text_cfg["context_length"] = force_context_length
+
+    # Check compatibility (e.g., QuickGELU warning for tags)
+    if schema is None and pretrained_cfg_for_tag:
+        # Only perform check if config came from built-in and weights from a tag
+        model_quick_gelu = model_cfg.get('quick_gelu', False) # Check the potentially overridden value
+        tag_quick_gelu = pretrained_cfg_for_tag.get('quick_gelu', False)
+        if tag_quick_gelu != model_quick_gelu:
+            # Warn if the final model config's GELU setting mismatches the tag's training setting
+             warnings.warn(
+                 f"QuickGELU mismatch between final model config (quick_gelu={model_quick_gelu}) "
+                 f"and pretrained tag '{pretrained}' (quick_gelu={tag_quick_gelu}).",
+                 UserWarning
+             )
+
+    # Decide whether to use the checkpoint path based on load_weights
+    if checkpoint_path is not None:
+        if not load_weights:
+            _logger.info(
+                f"Potential checkpoint path '{checkpoint_path}' found, but skipping assignment due to load_weights=False.")
+            checkpoint_path = None
+    else:
+        _logger.info("No potential checkpoint path found from config source or pretrained arg.")
+
+    # Set default base weight loading flags for image and text towers
+    # Only load base pretrained weights if other weights will not be loaded into respective towers
+    enable_default_image_weights = (
+        pretrained_image and not is_audio_model and pretrained_image_path is None and checkpoint_path is None
+    )
+    enable_default_text_weights = pretrained_text and pretrained_text_path is None and checkpoint_path is None
+    is_timm_model = (not is_audio_model) and 'timm_model_name' in model_cfg.get("vision_cfg", {})
+    is_hf_text_model = 'hf_model_name' in model_cfg.get('text_cfg', {})
+    is_modern_text_model = model_cfg.get('text_cfg', {}).get('text_arch') == 'modern'
+    is_variable_text_model = bool(model_cfg.get('text_cfg', {}).get('variable_text', False))
+    if is_timm_model:
+        vision_cfg['timm_model_pretrained'] = enable_default_image_weights
+    else:
+        enable_default_image_weights = False  # for accurate logging
+    if is_hf_text_model:
+        text_cfg['hf_model_pretrained'] = enable_default_text_weights
+    else:
+        enable_default_text_weights = False  # for accurate logging
+
+    # Share config-family classification with tokenizer validation and trait prediction.
+    family = traits_from_config(model_cfg).family
+    if family in (ModelFamily.GENLIP, ModelFamily.GENLAP):
+        model_cfg.pop('custom_text', None)
+        model_class = NaFlexGenLip if family is ModelFamily.GENLIP else NaFlexGenLap
+    elif family is ModelFamily.CLAP:
+        model_class = CLAP
+    else:
+        custom_text_requested = model_cfg.pop('custom_text', False)
+        custom_text = (
+            custom_text_requested or force_custom_text or is_hf_text_model or
+            is_modern_text_model or is_variable_text_model
+        )
+        if family is ModelFamily.MAMMUT:
+            # single text decoder serving both contrastive & caption passes
+            model_class = MaMMUT
+        elif custom_text:
+            if family is ModelFamily.COCA:
+                model_class = CoCa
+            else:
+                model_class = CustomTextCLIP
+        else:
+            model_class = CLIP
+
+    # Strip removed legacy kwargs that external callers may still pass
+    if 'jit' in model_kwargs:
+        model_kwargs.pop('jit')
+        warnings.warn(
+            "The 'jit' argument has been removed from create_model(). "
+            "TorchScript support is no longer available.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    # Apply final **kwargs overrides (highest priority) to a copy of model_cfg
+    final_model_cfg = deepcopy(model_cfg)
+    final_model_cfg.update(model_kwargs)
+
+    # Get casting dtype based on precision argument
+    cast_dtype = get_cast_dtype(precision)
+
+    # Instantiate the model
+    _logger.info(f"Instantiating model architecture: {model_class.__name__}")
+    model = model_class(**final_model_cfg, cast_dtype=cast_dtype)
+    # Resolved traits (family + tower-level facts) ride on the model; see model_traits.get_model_traits.
+    model.traits = traits_from_model(model)
+    _set_model_device_and_precision(model, device, precision, is_timm_model)
+
+    # Load Full Pretrained CLIP Weights (if path exists)
+    pretrained_loaded = False
+    if checkpoint_path:
+        _logger.info(f'Loading full pretrained weights from: {checkpoint_path}')
+        if pretrained_cfg_for_tag and pretrained_cfg_for_tag.get('hf_transformers_clap', False):
+            from .audio.convert import load_hf_clap_state_dict
+
+            state_dict = load_hf_clap_state_dict(checkpoint_path)
+            incompatible_keys = model.load_state_dict(state_dict, strict=False)
+            _logger.info(
+                f"Loaded Transformers CLAP checkpoint from {checkpoint_path}. "
+                f"Incompatible keys: {incompatible_keys}"
+            )
+        else:
+            # Use the load_checkpoint helper which handles state dict loading, conversions, etc.
+            # Use strict=True by default for full model loading to catch mismatches.
+            load_checkpoint(
+                model,
+                checkpoint_path,
+                strict=True,
+                weights_only=weights_only,
+                device='cpu' # Load to CPU first
+            )
+        pretrained_loaded = True
+
+    # Load tower-specific weights (image and text), after the full CLIP checkpoint, potentially overwriting parts.
+    pretrained_image_loaded = False # Track if specific image weights loaded
+    if pretrained_image_path:
+        if os.path.isfile(pretrained_image_path):
+            _logger.info(f"Attempting to load image tower weights from: {pretrained_image_path}")
+            try:
+                # Load the state dict from the file
+                image_state_dict = load_state_dict(
+                    pretrained_image_path,
+                    device='cpu',
+                    weights_only=weights_only
+                )
+                # Check if model has the 'visual' attribute
+                if hasattr(model, 'visual'):
+                    # Load into the visual tower, use strict=False for flexibility
+                    incompatible_keys = model.visual.load_state_dict(image_state_dict, strict=False)
+                    _logger.info(
+                        f"Loaded image tower weights from {pretrained_image_path}. Incompatible keys: {incompatible_keys}")
+                    pretrained_image_loaded = True # Mark specific image weights as loaded
+                else:
+                    # Model structure doesn't match expectation
+                    _logger.warning(
+                        f"Model does not have a 'visual' attribute, cannot load image tower weights from {pretrained_image_path}")
+            except Exception as e:
+                # Handle errors during image tower weight loading
+                _logger.error(f"Error loading image tower weights from {pretrained_image_path}: {e}")
+        else:
+            # Path provided is not a valid file
+            _logger.warning(f"Invalid file path specified for pretrained_image_path: {pretrained_image_path}")
+
+    pretrained_text_loaded = False # Track if specific text weights loaded
+    if pretrained_text_path:
+        if os.path.isfile(pretrained_text_path):
+            _logger.info(f"Attempting to load text tower weights from: {pretrained_text_path}")
+            try:
+                # Load the state dict from the file
+                text_state_dict = load_state_dict(
+                    pretrained_text_path,
+                    device='cpu',
+                    weights_only=weights_only
+                )
+                # Safely get the text attribute (usually 'text', but could be different)
+                text_module = getattr(model, 'text', model)
+                if text_module is not None:
+                    # Load into the text tower, use strict=False for flexibility
+                    incompatible_keys = text_module.load_state_dict(text_state_dict, strict=False)
+                    _logger.info(f"Loaded text tower weights from {pretrained_text_path}. Incompatible keys: {incompatible_keys}")
+                    pretrained_text_loaded = True # Mark specific text weights as loaded
+                else:
+                    # Model structure doesn't match expectation
+                    _logger.warning(f"Model does not have a standard 'text' attribute, cannot load text tower weights from {pretrained_text_path}")
+            except Exception as e:
+                # Handle errors during text tower weight loading
+                _logger.error(f"Error loading text tower weights from {pretrained_text_path}: {e}")
+        else:
+            # Path provided is not a valid file
+            _logger.warning(f"Invalid file path specified for pretrained_text_path: {pretrained_text_path}")
+
+    pretrained_audio_loaded = False
+    if pretrained_audio_path:
+        if os.path.isfile(pretrained_audio_path):
+            if hasattr(model, 'audio') and hasattr(model.audio, 'load_pretrained_encoder'):
+                _logger.info(f"Attempting to load audio encoder weights from: {pretrained_audio_path}")
+                try:
+                    incompatible_keys = model.audio.load_pretrained_encoder(
+                        pretrained_audio_path,
+                        weights_only=weights_only,
+                    )
+                    _logger.info(
+                        f"Loaded audio encoder weights from {pretrained_audio_path}. "
+                        f"Incompatible keys: {incompatible_keys}"
+                    )
+                    pretrained_audio_loaded = True
+                except Exception as e:
+                    _logger.error(f"Error loading audio encoder weights from {pretrained_audio_path}: {e}")
+            else:
+                _logger.warning(
+                    f"Model does not have an audio encoder loader, cannot load {pretrained_audio_path}"
+                )
+        else:
+            _logger.warning(f"Invalid file path specified for pretrained_audio_path: {pretrained_audio_path}")
+
+    partially_loaded = enable_default_text_weights or enable_default_image_weights \
+        or pretrained_image_loaded or pretrained_text_loaded or pretrained_audio_loaded
+    if require_pretrained and not pretrained_loaded:
+         # If CLIP weights were required but failed to load, raise an error.
+         # Loading tower-specific weights does not satisfy `require_pretrained`.
+         raise RuntimeError(
+             f"Required pretrained weights (`model_name='{model_name}', pretrained='{pretrained}'`) could not be loaded. "
+         )
+    elif not pretrained_loaded and partially_loaded:
+         # Some tower weights loaded
+         _logger.warning(f"Model {model_name} initialized partially.")
+    elif not pretrained_loaded and not partially_loaded:
+         # Absolutely no weights were loaded from any source
+         _logger.warning(f"No pretrained weights loaded for model '{model_name}'. Model initialized randomly.")
+
+    if output_dict and hasattr(model, "output_dict"):
+        # Enable dictionary output if model supports it
+        model.output_dict = True
+
+    # If force_image_size was specified and we have a timm model, call set_input_size after loading weights
+    if force_image_size is not None and is_timm_model and hasattr(model.visual, 'set_input_size'):
+        _logger.info(f"Calling set_input_size({force_image_size}) on timm vision model.")
+        model.visual.set_input_size(force_image_size)
+
+    # Prepare and set final image preprocessing configuration on image models.
+    visual_module = getattr(model, 'visual', None)
+    if visual_module is not None:
+        final_preprocess_cfg = deepcopy(preprocess_cfg)
+        if hasattr(visual_module, 'image_size'):
+            final_preprocess_cfg['size'] = visual_module.image_size
+        final_preprocess_cfg = merge_preprocess_dict(final_preprocess_cfg, force_preprocess_cfg or {})
+        set_model_preprocess_cfg(model, final_preprocess_cfg)
+        _logger.info(f"Final image preprocessing configuration set: {final_preprocess_cfg}")
+
+    # Log completion and return the configured model
+    _logger.info(f"Model {model_name} creation process complete.")
+    return model
+
+
+def _validate_special_tokens(text_config: dict, tokenizer, generative: bool = False) -> None:
+    """Fail fast when a config's special token ids disagree with the resolved tokenizer.
+
+    eos: ``pool_type == 'eos'`` (and the modern text arch's ``'argmax'``, which remaps to eos pooling) requires
+    an explicit ``eos_id`` matching the tokenizer's eos/eot id -- ``eos_id`` has no config default because a
+    wrong id pools silently wrong positions, which is far harder to notice than this error.
+
+    pad: ``pad_id`` is the id that *fills padding positions* -- towers mask via ``text != pad_id`` while
+    collators/tokenizers fill with the tokenizer's pad id, so an explicit ``pad_id`` that drifts from the
+    tokenizer corrupts masks/pooling silently. (For SimpleTokenizer there is no reserved pad token at all:
+    it fills with 0, which is also a real vocab token -- the historical CLIP convention.) ``variable_text``
+    additionally requires the tokenizer to have a reserved pad id at all (also enforced at data setup by
+    ``get_text_pad_id``; checked here so it fails at tokenizer resolution rather than deep in the data
+    pipeline).
+
+    generative: models with a caption/LM loss consume ``pad_id`` as the loss ignore_index, so a generative
+    config paired with a tokenizer that reserves a nonzero pad must declare ``pad_id`` explicitly -- the
+    unset default (0) would silently train the caption loss on padding tokens (e.g. roberta pad=1).
+    """
+    pool_type = text_config.get('pool_type', 'argmax')
+    uses_eos = pool_type == 'eos' or (text_config.get('text_arch') == 'modern' and pool_type == 'argmax')
+    if uses_eos:
+        eos_id = text_config.get('eos_id', None)
+        if eos_id is None:
+            raise ValueError(
+                "pool_type='eos' requires text_cfg.eos_id (must match the tokenizer eos/eot token id)."
+            )
+        tokenizer_eos = getattr(tokenizer, 'eot_token_id', None)
+        if tokenizer_eos is not None and int(tokenizer_eos) != int(eos_id):
+            raise ValueError(
+                f"text_cfg.eos_id ({eos_id}) does not match the resolved tokenizer's eos/eot token id "
+                f"({tokenizer_eos}); eos pooling would index the wrong positions."
+            )
+
+    tokenizer_pad = getattr(tokenizer, 'pad_token_id', None)
+    if text_config.get('variable_text', False) and tokenizer_pad is None:
+        raise ValueError(
+            "variable_text=True requires a tokenizer with a reserved `pad_token_id` (id 0 is a real vocab "
+            "token in most BPE vocabs, so no fallback is assumed)."
+        )
+    pad_id = text_config.get('pad_id', None)
+    if pad_id is not None and tokenizer_pad is not None and int(tokenizer_pad) != int(pad_id):
+        raise ValueError(
+            f"text_cfg.pad_id ({pad_id}) does not match the resolved tokenizer's pad token id "
+            f"({tokenizer_pad}); pad masks and per-batch padding would disagree."
+        )
+    if generative:
+        if pad_id is not None and int(pad_id) != 0 and tokenizer_pad is None:
+            # e.g. pad_id copied from an HF config onto a SimpleTokenizer model: the tokenizer fills
+            # padding with 0 while masks/labels would key on pad_id -- silent training corruption.
+            raise ValueError(
+                f"text_cfg.pad_id ({pad_id}) is set but the resolved tokenizer has no reserved pad "
+                f"token (it fills padding with 0); the pad-value fallback mask and the actual fill "
+                f"would disagree."
+            )
+        if pad_id is None and tokenizer_pad is not None and int(tokenizer_pad) != 0:
+            # the training pipeline supplies attention_mask for generative models, so this only
+            # affects the pad-value fallback paths (direct encode_text, custom loops without masks)
+            warnings.warn(
+                f"Generative model config does not set pad_id but the tokenizer reserves a nonzero "
+                f"pad token ({tokenizer_pad}); pad-value fallback masking (used when no "
+                f"attention_mask is provided) will assume 0 and disagree with the actual padding. "
+                f"Set text_cfg/multimodal_cfg pad_id explicitly.",
+                UserWarning,
+            )
+
+
+def get_tokenizer(
+        model_name: str = '',
+        context_length: Optional[int] = None,
+        cache_dir: Optional[str] = None,
+        **kwargs, # Additional tokenizer kwargs passed to constructor
+) -> Tokenizer:
+    """
+    Gets the appropriate tokenizer based on the model identifier schema or name.
+
+    `model_name` can specify source via schema:
+      - 'ViT-B-32': Looks up built-in config to determine tokenizer type.
+      - 'hf-hub:org/repo': Loads config from HF Hub to determine tokenizer type.
+      - 'local-dir:/path/to/folder': Loads config from local dir to determine tokenizer type.
+    """
+    schema, identifier = parse_model_name(model_name)
+
+    config = {} # Stores the loaded model_cfg relevant section (usually text_cfg)
+    local_dir_path = None # Store path if schema is local-dir to resolve relative paths
+    hf_fallback_id = None
+
+    # Determine Configuration Source based on Schema
+    _logger.info(f"Parsing tokenizer identifier. Schema: {schema}, Identifier: {identifier}")
+
+    if schema == 'local-dir':
+        # Handle local directory schema
+        local_dir_path = Path(identifier) # Store the path for later use
+        if not local_dir_path.is_dir():
+            raise FileNotFoundError(f"Directory specified via 'local-dir:' schema not found at {local_dir_path}")
+        local_config_path = local_dir_path / 'open_clip_config.json'
+        _logger.info(f"Attempting to load config from local-dir: {local_config_path}")
+        if local_config_path.is_file():
+            try:
+                # Load and parse the JSON config
+                with open(local_config_path, 'r', encoding='utf-8') as f:
+                    local_json_config = json.load(f)
+                local_json_config = _translate_external_config(local_json_config)
+                if 'model_cfg' in local_json_config:
+                    config = local_json_config['model_cfg']
+                else:
+                    raise ValueError(f"Local config {local_config_path} missing 'model_cfg'.")
+            except Exception as e:
+                raise ValueError(f"Could not load valid config for 'local-dir:{identifier}' ({e}).") from e
+        else:
+             raise FileNotFoundError(f"'local-dir:' specified, but config file missing: {local_config_path}")
+
+    elif schema == 'hf-hub':
+        # Handle Hugging Face Hub schema
+        model_id = identifier
+        _logger.info(f"Attempting to load config from hf-hub:{model_id}")
+        config_err = ''
+        try:
+            # Fetch config from HF Hub
+            hf_config = _get_hf_config(model_id, cache_dir=cache_dir)  # translated at ingestion
+            config = hf_config.get('model_cfg', None)
+            if not config:
+                config_err = 'model_cfg key not found'
+        except Exception as e:
+            config_err = str(e)
+        if not config:
+            hf_fallback_id = model_id
+            config = {}
+            _logger.warning(
+                f"Could not load config from hf-hub:{model_id} ({config_err})."
+                f"Falling back to using model_id for tokenizer.")
+
+    elif schema is None and identifier:
+        # Try built-in config lookup using the identifier (original model_name)
+        _logger.info(f"Attempting to load config from built-in: {identifier}")
+        config = get_model_config(identifier)
+
+    # Check if config determination failed completely (should only be possible if initial schema parsing failed badly)
+    if config is None:
+        _logger.warning(f"Model configuration not found, returning default SimpleTokenizer.")
+        return SimpleTokenizer(context_length=context_length or DEFAULT_CONTEXT_LENGTH, **kwargs)
+
+    # Safely access text_cfg even if config is {} (from non-builtin name case)
+    # MaMMUT models carry their text/tokenizer settings in multimodal_cfg instead
+    text_config = config.get('text_cfg')
+    if not text_config:
+        text_config = config.get('multimodal_cfg') or {}
+        if text_config and 'pool_type' not in text_config:
+            # MultimodalCfg defaults pool_type to 'avg' (not CLIPTextCfg's 'argmax'); make that explicit so
+            # _validate_special_tokens doesn't apply the argmax->eos rules to a mean-pooled MaMMUT decoder.
+            text_config = dict(text_config, pool_type='avg')
+
+    # Resolve context length: argument > config > default
+    if context_length is None:
+        # Use context_length from text_cfg if available, otherwise default
+        context_length = text_config.get('context_length', DEFAULT_CONTEXT_LENGTH)
+
+    # Merge tokenizer kwargs: function kwargs override config kwargs
+    tokenizer_kwargs = text_config.get('tokenizer_kwargs', {}) # Start with config kwargs
+    tokenizer_kwargs.update(kwargs) # Apply caller kwargs, overriding config ones
+
+    # Get the specified HF tokenizer name from config, if any
+    hf_tokenizer_name = text_config.get('hf_tokenizer_name', '')
+    if not hf_tokenizer_name and hf_fallback_id:
+        hf_tokenizer_name = hf_fallback_id
+
+    if text_config.get('tokenizer_type', '') == 'tiktoken':
+        # tiktoken-based tokenizer for generative (GenLIP) models.
+        encoding_name = text_config.get('tiktoken_name', 'cl100k_base')
+        bpe_path = text_config.get('tiktoken_bpe_path')
+        encoding_config_path = text_config.get('tiktoken_config_path')
+        if bpe_path:
+            if schema == 'local-dir':
+                bpe_path = str(local_dir_path / bpe_path)
+                if encoding_config_path:
+                    encoding_config_path = str(local_dir_path / encoding_config_path)
+            elif schema == 'hf-hub':
+                bpe_path = download_pretrained_from_hf(identifier, filename=bpe_path, cache_dir=cache_dir)
+                if encoding_config_path:
+                    encoding_config_path = download_pretrained_from_hf(
+                        identifier, filename=encoding_config_path, cache_dir=cache_dir,
+                    )
+        _logger.info(f"Using TikTokenTokenizer with encoding: '{encoding_name}'")
+        tokenizer = TikTokenTokenizer(
+            encoding_name=encoding_name,
+            context_length=context_length,
+            bpe_path=bpe_path,
+            encoding_config_path=encoding_config_path,
+            **{k: v for k, v in tokenizer_kwargs.items() if k in ('add_bos', 'add_eos', 'clean')},
+        )
+
+    elif hf_tokenizer_name:
+        # If 'hf_tokenizer_name' key exists in text_cfg (even if empty string): Use HFTokenizer.
+        if schema == 'local-dir':
+            # If config came from local-dir, ALWAYS use the local dir path for HFTokenizer.
+            # This assumes the tokenizer files are inside that directory.
+            tokenizer_source = local_dir_path
+        else:
+            tokenizer_source = hf_tokenizer_name
+        tokenizer_mode = text_config.get('tokenizer_mode', None)
+
+        _logger.info(f"Using HFTokenizer with source: '{tokenizer_source}', mode: '{tokenizer_mode}'")
+        tokenizer_kwargs.pop('trust_remote_code', False)
+        tokenizer = HFTokenizer(
+            tokenizer_source,
+            context_length=context_length,
+            cache_dir=cache_dir,
+            tokenizer_mode=tokenizer_mode,
+            **tokenizer_kwargs,
+        )
+
+    elif schema is None and 'siglip' in identifier.lower():
+        # Check for SigLIP naming convention ONLY if no schema was present AND no hf_tokenizer_name found
+        # Avoids misinterpreting 'local-dir:/path/with/siglip/in/name'
+        tn_variant = 'gemma' if 'siglip2' in identifier.lower() else 'mc4' if 'i18n' in identifier.lower() else 'c4-en'
+        _logger.info(f"Using SigLipTokenizer variant: {tn_variant}")
+        tokenizer = SigLipTokenizer(
+            tn_variant,
+            context_length=context_length,
+        )
+    else:
+        # Default to SimpleTokenizer if no HF specified and not SigLIP name match
+        _logger.info("Using default SimpleTokenizer.")
+        tokenizer = SimpleTokenizer(
+            context_length=context_length,
+            **tokenizer_kwargs,
+        )
+
+    # generative models (caption/LM loss) consume pad_id as the loss ignore_index -- require it explicit
+    # when the tokenizer reserves a nonzero pad (see _validate_special_tokens)
+    _validate_special_tokens(text_config, tokenizer, generative=traits_from_config(config).generative)
+
+    return tokenizer
+
+
+def _set_model_device_and_precision(
+        model: torch.nn.Module,
+        device: torch.device,
+        precision: str,
+        is_timm_model: bool = False
+):
+    if precision in ("fp16", "bf16"):
+        dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
+        # manual mixed precision that matches original OpenAI behaviour
+        if is_timm_model:
+            from .transformer import LayerNormFp32
+            # FIXME this is a bit janky, create timm based model in low-precision and
+            # then cast only LayerNormFp32 instances back to float32 so they don't break.
+            # Why? The convert_weights_to_lp fn only works with native models.
+            model.to(device=device, dtype=dtype)
+
+            def _convert_ln(m):
+                if isinstance(m, LayerNormFp32):
+                    m.weight.data = m.weight.data.to(torch.float32)
+                    m.bias.data = m.bias.data.to(torch.float32)
+
+            model.apply(_convert_ln)
+        else:
+            model.to(device=device)
+            convert_weights_to_lp(model, dtype=dtype)
+    elif precision in ("pure_fp16", "pure_bf16"):
+        dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
+        model.to(device=device, dtype=dtype)
+    else:
+        model.to(device=device)
+
+
+def _use_loss_label_cache(args):
+    # Task/step compile captures the loss module. Avoid mutable label-cache
+    # state inside compiled regions; arange is cheap enough.
+    return not (
+        getattr(args, "torchcompile", False)
+        and getattr(args, "torchcompile_strategy", "task") in ("task", "step")
+    )
+
+
+_UNSET_PAD_ID = object()
+
+
+def create_loss(
+        loss_type: str,
+        *,
+        local_loss: bool = False,
+        gather_with_grad: bool = False,
+        cache_labels: bool = False,
+        rank: int = 0,
+        world_size: int = 1,
+        caption_loss_weight: float = 2.0,
+        clip_loss_weight: float = 1.0,
+        pad_id=_UNSET_PAD_ID,
+        z_loss_weight: float = 0.0,
+        compute_dtype: Union[str, torch.dtype] = torch.float32,
+        ignore_index: int = -100,
+        dist_impl: Optional[str] = None,
+        chunk_size: int = 0,
+):
+    """Construct a standalone loss from explicit options, without a model or training namespace.
+
+    Args:
+        loss_type: ``"clip"``, ``"distill_clip"``, ``"siglip"``, ``"coca"`` (also MaMMUT), or
+            ``"genlip"`` (also GenLAP). These select loss contracts, not model architectures.
+        local_loss: Compute local contrastive logits for clip, distill_clip, or coca.
+        gather_with_grad: Gather contrastive features with gradients for those same losses.
+        cache_labels: Cache contrastive labels; disable when compiling a region containing the loss.
+        rank: Distributed rank for contrastive losses.
+        world_size: Distributed world size for contrastive losses.
+        caption_loss_weight: Caption CE weight for coca.
+        clip_loss_weight: Contrastive weight for coca.
+        pad_id: Required explicitly for coca: an integer for raw labels, or ``None`` for labels
+            already masked to -100. The loss never infers a tokenizer's padding convention.
+        z_loss_weight: Caption z-loss weight for coca or genlip.
+        compute_dtype: Caption compute dtype for coca or genlip (``"float32"``, ``"model"``, or a dtype).
+        ignore_index: Masked label value for genlip. CoCa always uses -100, plus pad_id when supplied.
+        dist_impl: Distributed exchange implementation for siglip.
+        chunk_size: SigLIP logits chunk size (0 disables chunking).
+
+    Non-default options that do not apply to the selected loss raise ValueError. Caption logits and
+    labels must already be aligned for next-token prediction. The legacy trainer uses
+    ``open_clip_train.loss.create_loss_from_args`` to translate its model and CLI settings.
+    """
+    distributed = ("cache_labels", "rank", "world_size")
+    contrastive = distributed + ("local_loss", "gather_with_grad")
+    caption = ("z_loss_weight", "compute_dtype")
+    specs = {
+        "clip": (ClipLoss, contrastive),
+        "distill_clip": (DistillClipLoss, contrastive),
+        "siglip": (SigLipLoss, distributed + ("dist_impl", "chunk_size")),
+        "coca": (CoCaLoss, contrastive + caption + ("caption_loss_weight", "clip_loss_weight", "pad_id")),
+        "genlip": (GenLipLoss, caption + ("ignore_index",)),
+    }
+    if loss_type not in specs:
+        raise ValueError(f"Unknown loss_type {loss_type!r}; expected one of {', '.join(specs)}.")
+    loss_class, supported = specs[loss_type]
+    if compute_dtype == "float32":
+        compute_dtype = torch.float32
+    # Pair each supplied value with its neutral default; the same spec validates and forwards options.
+    options = dict(
+        local_loss=(local_loss, False),
+        gather_with_grad=(gather_with_grad, False),
+        cache_labels=(cache_labels, False),
+        rank=(rank, 0),
+        world_size=(world_size, 1),
+        caption_loss_weight=(caption_loss_weight, 2.0),
+        clip_loss_weight=(clip_loss_weight, 1.0),
+        pad_id=(pad_id, _UNSET_PAD_ID),
+        z_loss_weight=(z_loss_weight, 0.0),
+        compute_dtype=(compute_dtype, torch.float32),
+        ignore_index=(ignore_index, -100),
+        dist_impl=(dist_impl, None),
+        chunk_size=(chunk_size, 0),
+    )
+    unsupported = [name for name, (value, default) in options.items() if name not in supported and value != default]
+    if unsupported:
+        raise ValueError(f"Options not supported for {loss_type}: {', '.join(unsupported)}.")
+    if loss_type == "coca" and pad_id is _UNSET_PAD_ID:
+        raise ValueError("coca requires explicit pad_id: an integer for raw labels, or None for -100 masked labels.")
+    return loss_class(**{name: options[name][0] for name in supported})
+
+
+def create_task(args, model, dist_model=None, naflex_data_config=None):
+    """Create a training task wrapping model + loss.
+
+    The task constructs its own loss internally from the provided args.
+    Loss type is determined by the task class (CLIPTask -> ClipLoss, etc.).
+
+    Args:
+        args: Training arguments (must have model, distill, siglip, etc.).
+        model: The CLIP model.
+        dist_model: Optional teacher model for distillation.
+        naflex_data_config: Optional resolved NaFlex data policy.
+
+    Returns:
+        A TrainingTask subclass instance.
+    """
+    from .task import CLIPTask, SigLIPTask, CoCaTask, GenLipTask, GenLapTask, DistillCLIPTask, CLAPTask, unwrap_model
+
+    model_unwrapped = unwrap_model(model)
+    if args.distill:
+        validate_distillation(get_model_traits(model_unwrapped))
+    # Dispatch on the built model, including wrapped models and renamed configurations.
+    if isinstance(model_unwrapped, CLAP):
+        task_cls = CLAPTask
+    elif args.distill:
+        task_cls = DistillCLIPTask
+    elif isinstance(model_unwrapped, (CoCa, MaMMUT)):
+        task_cls = CoCaTask
+    elif isinstance(model_unwrapped, NaFlexGenLap):
+        task_cls = GenLapTask
+    elif isinstance(model_unwrapped, NaFlexGenLip):
+        task_cls = GenLipTask
+    else:
+        task_cls = SigLIPTask if args.siglip else CLIPTask
+
+    options = {} if task_cls in (GenLipTask, GenLapTask) else dict(rank=args.rank, world_size=args.world_size)
+    if task_cls in (CLIPTask, CLAPTask, DistillCLIPTask, CoCaTask):
+        options.update(local_loss=args.local_loss, gather_with_grad=args.gather_with_grad,
+                       cache_labels=_use_loss_label_cache(args))
+    if task_cls in (CoCaTask, GenLipTask, GenLapTask):
+        options.update(
+            caption_z_loss_weight=getattr(args, 'caption_z_loss_weight', 0.0),
+            caption_loss_compute_dtype=getattr(args, 'caption_loss_compute_dtype', 'float32'),
+            caption_loss_chunk_size=getattr(args, 'caption_loss_chunk_size', 4096),
+        )
+    if task_cls is CoCaTask:
+        options.update(
+            caption_loss_weight=args.coca_caption_loss_weight,
+            clip_loss_weight=args.coca_contrastive_loss_weight,
+            fused_caption_loss=getattr(args, 'fused_caption_loss', False),
+        )
+    elif task_cls is SigLIPTask:
+        options.update(dist_impl=args.loss_dist_impl, chunk_size=getattr(args, 'siglip_chunk_size', 0))
+    task = (task_cls(model, dist_model, **options) if task_cls is DistillCLIPTask
+            else task_cls(model, **options))
+    if naflex_data_config is not None:
+        # Every task carries the NaFlex data policy via the base TrainingTask (image-text and audio-text alike).
+        task.set_naflex_data_config(naflex_data_config)
+    return task
+
+
+def _with_naflex_aug_cfg(aug_cfg):
+    """Return ``aug_cfg`` with the timm NaFlex transform pipeline enabled (dict, AugmentationCfg, or None)."""
+    if aug_cfg is None:
+        return {'use_timm': True, 'naflex': True}
+    if isinstance(aug_cfg, dict):
+        return {**aug_cfg, 'use_timm': True, 'naflex': True}
+    from dataclasses import replace as _replace
+    return _replace(aug_cfg, use_timm=True, naflex=True)
+
+
+def _build_preprocess(model, *, aug_cfg=None, audio_aug_cfg=None):
+    """Return ``(preprocess_train, preprocess_val)`` for the model's modality.
+
+    Three branches: GenLAP (NaFlex spectrogram → ``AudioNaFlexTransformFactory``), CLAP (``audio_transform_v2``),
+    and image (``image_transform_v2`` + the NaFlex-eval val nuance). GenLAP must come first: it has neither
+    ``.audio`` nor ``.visual``, so it would otherwise crash the image branch. Shared by
+    ``create_model_and_transforms`` and ``create_model_from_pretrained``.
+    """
+    traits = get_model_traits(model)
+    if traits.family is ModelFamily.GENLAP:
+        from .audio.naflex_audio import AudioNaFlexTransformFactory
+
+        factory = AudioNaFlexTransformFactory(model.audio_cfg, pack_prefix=getattr(model, 'pack_prefix', False))
+        return factory, factory
+    if traits.audio_input is InputMode.NAFLEX:
+        # NaFlexClap: CLAP with a NaFlex spectrogram-ViT audio tower -> NaFlex patchify transform (not HTSAT).
+        from .audio.naflex_audio import AudioNaFlexCfg, AudioNaFlexTransformFactory
+
+        factory = AudioNaFlexTransformFactory(AudioNaFlexCfg.from_clip_audio_cfg(model.audio.cfg))
+        return factory, factory
+    if traits.audio_input is not InputMode.NONE:
+        from .audio.transform import audio_transform_v2
+
+        return (
+            audio_transform_v2(model.audio.cfg, is_train=True, audio_aug_cfg=audio_aug_cfg),
+            audio_transform_v2(model.audio.cfg, is_train=False, audio_aug_cfg=audio_aug_cfg),
+        )
+    if traits.requires_naflex_data:
+        # GenLIP requires both flags, even when the caller supplied naflex=True without use_timm=True.
+        aug_cfg = _with_naflex_aug_cfg(aug_cfg)
+    pp_cfg = PreprocessCfg(**model.visual.preprocess_cfg)
+    preprocess_train = image_transform_v2(pp_cfg, is_train=True, aug_cfg=aug_cfg)
+    if is_naflex_aug_cfg(aug_cfg):
+        preprocess_val = naflex_eval_transform_v2(pp_cfg)
+    else:
+        preprocess_val = image_transform_v2(pp_cfg, is_train=False)
+    return preprocess_train, preprocess_val
+
+
+def create_model_and_transforms(
+        model_name: str,
+        pretrained: Optional[str] = None,
+        load_weights: bool = True,
+        precision: str = 'fp32',
+        device: Union[str, torch.device] = 'cpu',
+        force_quick_gelu: bool = False,
+        force_custom_text: bool = False,
+        force_patch_dropout: Optional[float] = None,
+        force_image_size: Optional[Union[int, Tuple[int, int]]] = None,
+        force_context_length: Optional[int] = None,
+        force_naflex_vision: bool = False,
+        force_naflex_patch_interp: bool = False,
+        image_mean: Optional[Tuple[float, ...]] = None,
+        image_std: Optional[Tuple[float, ...]] = None,
+        image_interpolation: Optional[str] = None,
+        image_resize_mode: Optional[str] = None,  # only effective for inference
+        aug_cfg: Optional[Union[Dict[str, Any], AugmentationCfg]] = None,
+        audio_aug_cfg: Optional[Any] = None,
+        pretrained_image: bool = False,
+        pretrained_text: bool = True,
+        pretrained_image_path: Optional[str] = None,
+        pretrained_text_path: Optional[str] = None,
+        pretrained_audio_path: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+        output_dict: Optional[bool] = None,
+        weights_only: bool = True,
+        **model_kwargs,
+):
+    """
+    Creates a contrastive vision-language model along with preprocessing transforms for training and validation.
+
+    This function combines model creation with the generation of appropriate image preprocessing pipelines,
+    making it convenient for training workflows where both model and transforms are needed.
+
+    `model_name` specifies architecture/config source:
+      - 'ViT-B-32': Built-in model name. `pretrained` specifies CLIP weights source (tag or file path).
+      - 'hf-hub:org/repo': Loads config/weights from HF Hub. `pretrained` is IGNORED.
+      - 'local-dir:/path/to/folder': Loads config/weights from local dir. `pretrained` is IGNORED.
+
+    The preprocessing transforms are automatically configured based on the model's requirements,
+    with separate pipelines for training (with augmentation) and validation (without augmentation).
+
+    Args:
+        model_name: Model identifier, potentially with schema ('hf-hub:', 'local-dir:').
+        pretrained: Source for CLIP weights (tag or file path) ONLY if model_name has no schema.
+        load_weights: Load the resolved pretrained weights if True, otherwise random init or tower overrides only.
+        precision: Model precision ('fp32', 'fp16', 'bf16', ...).
+        device: Device ('cpu', 'cuda', ...).
+        force_quick_gelu: Force use of QuickGELU activation in model config.
+        force_custom_text: Force use of custom text encoder architecture.
+        force_patch_dropout: Override patch dropout value in model config.
+        force_image_size: Override image size in model config.
+        force_context_length: Override context length in model config.
+        force_naflex_vision: Convert compatible native OpenCLIP ViT or timm EVA/ViT vision towers to NaFlexVit.
+        force_naflex_patch_interp: Override ``vision_cfg.naflex_patch_interp`` to True: enable timm's parameter-free
+            patch-embed weight interpolator on a NaFlexVit vision tower so it accepts patches at sizes other than
+            its base patch size (variable-patch NaFlex training / eval). State-dict compatible. A model trained
+            this way should declare ``naflex_patch_interp`` in its config so plain loading needs no override.
+        image_mean: Override default image normalization mean values (per channel).
+        image_std: Override default image normalization std values (per channel).
+        image_interpolation: Override default interpolation method for image resizing.
+        image_resize_mode: Override resize mode for inference preprocessing ('squash', 'longest', 'shortest').
+        aug_cfg: Augmentation configuration for training transforms. Can be dict or AugmentationCfg object.
+                 Controls random crop, color jitter, etc. If None, uses model defaults.
+        pretrained_image: Load default (timm) base weights for image tower at creation if no CLIP weights loaded.
+        pretrained_text: Load default (hf) base weights for text tower at creation if no CLIP weights loaded.
+        pretrained_image_path: Path to load weights specifically into image tower after creation.
+        pretrained_text_path: Path to load weights specifically into text tower after creation.
+        pretrained_audio_path: Path to load weights specifically into audio encoder after creation.
+        cache_dir: Cache directory for downloads.
+        output_dict: If True and model supports it, return dict output.
+        weights_only: Use weights_only=True for torch.load (safer).
+        **model_kwargs: Additional keyword arguments for model constructor (highest override priority).
+
+    Returns:
+        Tuple[torch.nn.Module, Callable, Callable]: A tuple containing:
+            - model: The created model instance
+            - preprocess_train: Image preprocessing transform for training (includes augmentation)
+            - preprocess_val: Image preprocessing transform for validation/inference (no augmentation)
+              When ``aug_cfg`` enables NaFlex, this is a factory that must be called with
+              ``max_seq_len`` and ``patch_size`` and returns image patch dictionaries.
+
+    Example:
+        >>> # Basic usage with built-in model
+        >>> model, train_transform, val_transform = create_model_and_transforms('ViT-B-32', pretrained='openai')
+        >>>
+        >>> # With custom augmentation
+        >>> aug_cfg = {'scale': (0.9, 1.0), 'ratio': (1.0, 1.0)}
+        >>> model, train_transform, val_transform = create_model_and_transforms(
+        ...     'ViT-L-14',
+        ...     pretrained='datacomp_xl_s13b_b90k',
+        ...     aug_cfg=aug_cfg
+        ... )
+        >>>
+        >>> # From Hugging Face Hub
+        >>> model, train_transform, val_transform = create_model_and_transforms('hf-hub:org/model-repo')
+
+    Note:
+        The training transform includes data augmentation based on `aug_cfg`, while the validation
+        transform performs only the necessary preprocessing (resize, center crop, normalize) without
+        any random augmentation. NaFlex validation transforms are factory objects rather than direct
+        image callables; use the ``is_naflex_eval_transform_factory`` attribute to detect them.
+    """
+    force_preprocess_cfg = merge_preprocess_kwargs(
+        {},
+        mean=image_mean,
+        std=image_std,
+        interpolation=image_interpolation,
+        resize_mode=image_resize_mode,
+    )
+
+    model = create_model(
+        model_name,
+        pretrained,
+        load_weights=load_weights,
+        precision=precision,
+        device=device,
+        force_quick_gelu=force_quick_gelu,
+        force_custom_text=force_custom_text,
+        force_patch_dropout=force_patch_dropout,
+        force_image_size=force_image_size,
+        force_preprocess_cfg=force_preprocess_cfg,
+        force_context_length=force_context_length,
+        force_naflex_vision=force_naflex_vision,
+        force_naflex_patch_interp=force_naflex_patch_interp,
+        pretrained_image=pretrained_image,
+        pretrained_text=pretrained_text,
+        pretrained_image_path=pretrained_image_path,
+        pretrained_text_path=pretrained_text_path,
+        pretrained_audio_path=pretrained_audio_path,
+        cache_dir=cache_dir,
+        output_dict=output_dict,
+        weights_only=weights_only,
+        **model_kwargs,
+    )
+
+    preprocess_train, preprocess_val = _build_preprocess(model, aug_cfg=aug_cfg, audio_aug_cfg=audio_aug_cfg)
+
+    return model, preprocess_train, preprocess_val
+
+
+def create_model_from_pretrained(
+        model_name: str,
+        pretrained: Optional[str] = None,
+        precision: str = 'fp32',
+        device: Union[str, torch.device] = 'cpu',
+        force_quick_gelu: bool = False,
+        force_custom_text: bool = False,
+        force_image_size: Optional[Union[int, Tuple[int, int]]] = None,
+        force_context_length: Optional[int] = None,
+        force_naflex_vision: bool = False,
+        force_naflex_patch_interp: bool = False,
+        image_mean: Optional[Tuple[float, ...]] = None,
+        image_std: Optional[Tuple[float, ...]] = None,
+        image_interpolation: Optional[str] = None,
+        image_resize_mode: Optional[str] = None,  # only effective for inference
+        return_transform: bool = True,
+        cache_dir: Optional[str] = None,
+        audio_aug_cfg: Optional[Any] = None,
+        weights_only: bool = True,
+        **model_kwargs,
+):
+    """
+    Creates a contrastive vision-language model from pretrained weights with optional preprocessing transform.
+
+    This function is a convenience wrapper around `create_model` that enforces loading of pretrained weights
+    (require_pretrained=True) and optionally returns the appropriate preprocessing transform for inference.
+    It's designed for use cases where a pretrained model is required, such as feature extraction,
+    zero-shot classification, or fine-tuning.
+
+    `model_name` specifies architecture/config source:
+      - 'ViT-B-32': Built-in model name. `pretrained` specifies CLIP weights source (tag or file path).
+      - 'hf-hub:org/repo': Loads config/weights from HF Hub. `pretrained` is IGNORED.
+      - 'local-dir:/path/to/folder': Loads config/weights from local dir. `pretrained` is IGNORED.
+
+    Unlike `create_model`, this function will raise an error if pretrained weights cannot be loaded.
+
+    Args:
+        model_name: Model identifier, potentially with schema ('hf-hub:', 'local-dir:').
+        pretrained: Source for CLIP weights (tag or file path) ONLY if model_name has no schema.
+                   If None and schema requires it, will raise an error.
+        precision: Model precision ('fp32', 'fp16', 'bf16', ...).
+        device: Device ('cpu', 'cuda', ...).
+        force_quick_gelu: Force use of QuickGELU activation in model config.
+        force_custom_text: Force use of custom text encoder architecture.
+        force_image_size: Override image size in model config. Useful for using models at different resolutions.
+        force_context_length: Override context length in model config.
+        force_naflex_vision: Convert compatible native OpenCLIP ViT or timm EVA/ViT vision towers to NaFlexVit.
+        force_naflex_patch_interp: Override ``vision_cfg.naflex_patch_interp`` to True: enable timm's parameter-free
+            patch-embed weight interpolator on a NaFlexVit vision tower so it accepts patches at sizes other than
+            its base patch size (variable-patch NaFlex training / eval). State-dict compatible. A model trained
+            this way should declare ``naflex_patch_interp`` in its config so plain loading needs no override.
+        image_mean: Override default image normalization mean values (per channel).
+        image_std: Override default image normalization std values (per channel).
+        image_interpolation: Override default interpolation method for image resizing ('bicubic', 'bilinear', 'nearest').
+        image_resize_mode: Override resize mode for inference preprocessing ('squash', 'longest', 'shortest').
+            Only affects the returned preprocessing transform, not training.
+        return_transform: If True, returns (model, preprocess). If False, returns only model.
+        cache_dir: Cache directory for downloads.
+        weights_only: Use weights_only=True for torch.load (safer).
+        **model_kwargs: Additional keyword arguments for model constructor (highest override priority).
+
+    Returns:
+        Union[torch.nn.Module, Tuple[torch.nn.Module, Callable]]:
+            - If return_transform=False: Just the model instance
+            - If return_transform=True: Tuple of (model, preprocess) where preprocess is the
+              inference preprocessing transform
+
+    Raises:
+        RuntimeError: If pretrained weights are required but cannot be loaded.
+
+    Example:
+        >>> # Load model with preprocessing
+        >>> model, preprocess = create_model_from_pretrained('ViT-B-32', pretrained='openai')
+        >>>
+        >>> # Load model without preprocessing (e.g., when using custom preprocessing)
+        >>> model = create_model_from_pretrained('ViT-B-32', pretrained='openai', return_transform=False)
+        >>>
+        >>> # Load from Hugging Face Hub
+        >>> model, preprocess = create_model_from_pretrained('hf-hub:laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K')
+        >>>
+        >>> # Load with custom image size
+        >>> model, preprocess = create_model_from_pretrained(
+        ...     'ViT-L-14',
+        ...     pretrained='openai',
+        ...     force_image_size=336
+        ... )
+
+    Note:
+        This function always requires pretrained weights to be available and loaded successfully.
+        For cases where you want to create a model without pretrained weights or with only
+        partial weight loading, use `create_model` or `create_model_and_transforms` instead.
+    """
+    force_preprocess_cfg = merge_preprocess_kwargs(
+        {},
+        mean=image_mean,
+        std=image_std,
+        interpolation=image_interpolation,
+        resize_mode=image_resize_mode,
+    )
+
+    model = create_model(
+        model_name,
+        pretrained,
+        precision=precision,
+        device=device,
+        force_quick_gelu=force_quick_gelu,
+        force_custom_text=force_custom_text,
+        force_image_size=force_image_size,
+        force_preprocess_cfg=force_preprocess_cfg,
+        force_context_length=force_context_length,
+        force_naflex_vision=force_naflex_vision,
+        force_naflex_patch_interp=force_naflex_patch_interp,
+        cache_dir=cache_dir,
+        require_pretrained=True,
+        weights_only=weights_only,
+        **model_kwargs,
+    )
+
+    if not return_transform:
+        return model
+
+    _, preprocess = _build_preprocess(model, audio_aug_cfg=audio_aug_cfg)
+
+    return model, preprocess

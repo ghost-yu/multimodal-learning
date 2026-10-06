@@ -1,0 +1,161 @@
+{
+  "model": "gpt-5.5",
+  "items": [
+    {
+      "id": "0",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 1,
+      "bbox": [
+        307.44000244140625,
+        696.7556762695312,
+        541.440673828125,
+        717.212158203125
+      ],
+      "source": "1While some works employ additional objectives and data\nstructures, these two objectives apply to almost every VLP model."
+    },
+    {
+      "id": "1",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 3,
+      "bbox": [
+        307.44000244140625,
+        696.7556762695312,
+        541.4421997070312,
+        717.2099609375
+      ],
+      "source": "2Bugliarello et al. (2020) showed that a controlled setup bridges\nthe performance gap of various region-feature-based VLP models."
+    },
+    {
+      "id": "2",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 4,
+      "bbox": [
+        307.1180114746094,
+        675.9426879882812,
+        541.721435546875,
+        717.2273559570312
+      ],
+      "source": "3Parameters for R50 is 25M, R101 is 44M, and X152 is 60M.\n4We also experimented with initializing the layers from BERT\nweights and using the pre-trained patch projection from ViT, but it\ndid not work."
+    },
+    {
+      "id": "3",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 5,
+      "bbox": [
+        55.439998626708984,
+        676.8306884765625,
+        289.5924072265625,
+        717.2273559570312
+      ],
+      "source": "5ViT-B/32 is pre-trained with ImageNet-21K and ﬁne-tuned\non ImageNet-1K for image classiﬁcation. We expect that weights\npre-trained on larger datasets (e.g., JFT-300M) would yield better\nperformance."
+    },
+    {
+      "id": "4",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 6,
+      "bbox": [
+        307.44000244140625,
+        686.7926635742188,
+        542.5167236328125,
+        717.2273559570312
+      ],
+      "source": "6VQA score is calculated by comparing the inferred answer\nto 10 ground-truth answers: see https://visualqa.org/\nevaluation.html for details."
+    },
+    {
+      "id": "5",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 7,
+      "bbox": [
+        55.439998626708984,
+        668.8206787109375,
+        290.562744140625,
+        710.1043701171875
+      ],
+      "source": "7UNITER proposed three downstream head setups: pair, triplet,\nand pair-biattn.\n8R@K corresponds to whether the ground truth is included\namong top K results from the validation set."
+    },
+    {
+      "id": "6",
+      "paper": "ViLT",
+      "folder": "ViLT",
+      "page": 8,
+      "bbox": [
+        307.44000244140625,
+        686.7926635742188,
+        541.75390625,
+        717.2273559570312
+      ],
+      "source": "9FLOPs and time are neglectable because the operation is\nan embedding lookup. The 30K embedding dictionary used by\nbert-base-uncased has 23.47 M parameters"
+    },
+    {
+      "id": "7",
+      "paper": "PaLI-3",
+      "folder": "PaLI系列/PaLI-3",
+      "page": 3,
+      "bbox": [
+        120.65299987792969,
+        721.5196533203125,
+        448.9380187988281,
+        732.0283813476562
+      ],
+      "source": "2The embedding dimension was changed from 1664 to 1536 for better hardware utilization."
+    },
+    {
+      "id": "8",
+      "paper": "PaLI-3",
+      "folder": "PaLI系列/PaLI-3",
+      "page": 6,
+      "bbox": [
+        120.65299987792969,
+        721.5196533203125,
+        465.2389221191406,
+        732.0283813476562
+      ],
+      "source": "3We removed all validation and test images from the training set for both PaLI and the VQ-VAE"
+    }
+  ],
+  "translations": [
+    {
+      "id": "0",
+      "text": "1虽然一些工作采用了额外的目标和数据结构，但这两个目标几乎适用于每个VLP模型。"
+    },
+    {
+      "id": "1",
+      "text": "2Bugliarello et al. (2020) 表明，受控设置弥合了各种基于区域特征的VLP模型之间的性能差距。"
+    },
+    {
+      "id": "2",
+      "text": "3R50的参数量为25M，R101为44M，X152为60M。4我们还尝试使用BERT权重初始化这些层，并使用来自ViT的预训练patch投影，但没有奏效。"
+    },
+    {
+      "id": "3",
+      "text": "5ViT-B/32使用ImageNet-21K进行预训练，并在ImageNet-1K上针对图像分类进行微调。我们预计，在更大数据集（例如JFT-300M）上预训练的权重会带来更好的性能。"
+    },
+    {
+      "id": "4",
+      "text": "6VQA分数通过将推断出的答案与10个真实答案进行比较来计算：详情见https://visualqa.org/evaluation.html。"
+    },
+    {
+      "id": "5",
+      "text": "7UNITER提出了三种下游头设置：pair、triplet和pair-biattn。8R@K对应于真实结果是否包含在验证集的前K个结果中。"
+    },
+    {
+      "id": "6",
+      "text": "9FLOPs和时间可以忽略不计，因为该操作是一次嵌入查找。bert-base-uncased使用的30K嵌入字典有23.47 M个参数。"
+    },
+    {
+      "id": "7",
+      "text": "2为了更好地利用硬件，嵌入维度从1664改为1536。"
+    },
+    {
+      "id": "8",
+      "text": "3我们从PaLI和VQ-VAE的训练集中移除了所有验证图像和测试图像。"
+    }
+  ],
+  "source": "用户已配置翻译API"
+}
